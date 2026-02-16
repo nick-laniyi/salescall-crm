@@ -35,36 +35,46 @@ $search = $_GET['search'] ?? '';
 $status = $_GET['status'] ?? '';
 $show_imported = isset($_GET['imported']) && $_GET['imported'] == 1;
 
-// Build accessible leads query
-list($sql, $params) = getAccessibleLeadsQuery($pdo, $_SESSION['user_id']);
+// Get accessible lead IDs
+$accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id']);
 
-// Add search and filters
-$whereAdded = strpos($sql, 'WHERE') !== false;
-if ($search) {
-    $sql = $whereAdded 
-        ? str_replace("WHERE", "WHERE (l.name LIKE :search OR l.company LIKE :search OR l.email LIKE :search OR l.phone LIKE :search) AND ", $sql)
-        : $sql . " WHERE (l.name LIKE :search OR l.company LIKE :search OR l.email LIKE :search OR l.phone LIKE :search)";
-    $params[':search'] = "%$search%";
-    $whereAdded = true;
+$leads = [];
+if (!empty($accessibleIds)) {
+    // Build base query with IN clause
+    $placeholders = implode(',', array_fill(0, count($accessibleIds), '?'));
+    $sql = "SELECT l.*, 
+                   (l.user_id = ?) as is_owner,
+                   (SELECT permission FROM lead_shares WHERE lead_id = l.id AND user_id = ?) as shared_permission
+            FROM leads l
+            WHERE l.id IN ($placeholders)";
+    
+    $params = array_merge([$_SESSION['user_id'], $_SESSION['user_id']], $accessibleIds);
+    
+    // Add search condition
+    if ($search) {
+        $sql .= " AND (l.name LIKE ? OR l.company LIKE ? OR l.email LIKE ? OR l.phone LIKE ?)";
+        $searchTerm = "%$search%";
+        $params = array_merge($params, [$searchTerm, $searchTerm, $searchTerm, $searchTerm]);
+    }
+    
+    // Add status filter
+    if ($status && $status !== 'all') {
+        $sql .= " AND l.status = ?";
+        $params[] = $status;
+    }
+    
+    // Add imported filter
+    if ($show_imported && isset($_SESSION['last_import_time'])) {
+        $sql .= " AND l.created_at >= ?";
+        $params[] = $_SESSION['last_import_time'];
+    }
+    
+    $sql .= " ORDER BY l.created_at DESC";
+    
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $leads = $stmt->fetchAll();
 }
-if ($status && $status !== 'all') {
-    $sql = $whereAdded 
-        ? str_replace("WHERE", "WHERE l.status = :status AND ", $sql)
-        : $sql . " WHERE l.status = :status";
-    $params[':status'] = $status;
-    $whereAdded = true;
-}
-if ($show_imported && isset($_SESSION['last_import_time'])) {
-    $sql = $whereAdded 
-        ? str_replace("WHERE", "WHERE l.created_at >= :import_time AND ", $sql)
-        : $sql . " WHERE l.created_at >= :import_time";
-    $params[':import_time'] = $_SESSION['last_import_time'];
-}
-$sql .= " ORDER BY l.created_at DESC";
-
-$stmt = $pdo->prepare($sql);
-$stmt->execute($params);
-$leads = $stmt->fetchAll();
 
 include 'includes/header.php';
 ?>

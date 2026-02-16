@@ -3,10 +3,28 @@ require_once 'includes/auth.php';
 require_once 'includes/config.php';
 require_once 'includes/functions.php';
 
-// Get accessible leads
-list($sql, $params) = getAccessibleLeadsQuery($pdo, $_SESSION['user_id']);
+// Get accessible lead IDs
+$accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id']);
+
+if (empty($accessibleIds)) {
+    // No leads to export
+    header('Content-Type: text/plain');
+    echo "No leads to export.";
+    exit;
+}
+
+$placeholders = implode(',', array_fill(0, count($accessibleIds), '?'));
+
+// Fetch leads with additional info
+$sql = "SELECT l.*, 
+               (SELECT outcome FROM calls WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) as last_call_outcome,
+               (SELECT created_at FROM calls WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) as last_call_date,
+               (SELECT COUNT(*) FROM calls WHERE lead_id = l.id) as total_calls
+        FROM leads l
+        WHERE l.id IN ($placeholders)
+        ORDER BY l.created_at DESC";
 $stmt = $pdo->prepare($sql);
-$stmt->execute($params);
+$stmt->execute($accessibleIds);
 $leads = $stmt->fetchAll();
 
 // Set headers for CSV download
@@ -33,18 +51,7 @@ fputcsv($output, [
     'Total Calls'
 ]);
 
-// Get additional data for each lead
 foreach ($leads as $lead) {
-    // Get last call info
-    $stmt2 = $pdo->prepare("SELECT outcome, created_at FROM calls WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1");
-    $stmt2->execute([$lead['id']]);
-    $lastCall = $stmt2->fetch();
-    
-    // Get total calls count
-    $stmt3 = $pdo->prepare("SELECT COUNT(*) FROM calls WHERE lead_id = ?");
-    $stmt3->execute([$lead['id']]);
-    $totalCalls = $stmt3->fetchColumn();
-    
     fputcsv($output, [
         $lead['id'],
         $lead['name'],
@@ -54,9 +61,9 @@ foreach ($leads as $lead) {
         $lead['status'],
         $lead['notes'],
         $lead['created_at'],
-        $lastCall ? $lastCall['created_at'] : '',
-        $lastCall ? $lastCall['outcome'] : '',
-        $totalCalls
+        $lead['last_call_date'],
+        $lead['last_call_outcome'],
+        $lead['total_calls']
     ]);
 }
 

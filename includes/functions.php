@@ -13,6 +13,16 @@ function getAccessibleLeadsQuery($pdo, $userId) {
     return [$sql, [':user_id' => $userId]];
 }
 
+function getAccessibleLeadIds($pdo, $userId) {
+    // Returns an array of lead IDs accessible by the user (own or shared)
+    $stmt = $pdo->prepare("SELECT l.id 
+                           FROM leads l 
+                           LEFT JOIN lead_shares ls ON l.id = ls.lead_id AND ls.user_id = ? 
+                           WHERE l.user_id = ? OR ls.user_id IS NOT NULL");
+    $stmt->execute([$userId, $userId]);
+    return $stmt->fetchAll(PDO::FETCH_COLUMN);
+}
+
 function canViewLead($pdo, $leadId, $userId) {
     // Check if user can view a lead (own or shared with view/edit)
     $stmt = $pdo->prepare("SELECT l.user_id = ? as is_owner, ls.permission 

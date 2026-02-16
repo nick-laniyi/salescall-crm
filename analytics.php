@@ -3,35 +3,44 @@ require_once 'includes/auth.php';
 require_once 'includes/config.php';
 require_once 'includes/functions.php';
 
-// Get accessible leads IDs
-list($sql, $params) = getAccessibleLeadsQuery($pdo, $_SESSION['user_id']);
-// Modify to get only IDs for counting
-$sql = str_replace("l.*, (l.user_id = :user_id) as is_owner, MAX(ls.permission) as shared_permission", "l.id", $sql);
-$stmt = $pdo->prepare($sql);
-$stmt->execute($params);
-$leadIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
-$leadIdsPlaceholder = implode(',', array_fill(0, count($leadIds), '?'));
+// Get accessible lead IDs
+$accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id']);
+$totalLeads = count($accessibleIds);
 
-// Total leads
-$totalLeads = count($leadIds);
-
-// Leads by status
 $statusStats = [];
-if ($totalLeads > 0) {
-    $stmt = $pdo->prepare("SELECT status, COUNT(*) as count FROM leads WHERE id IN ($leadIdsPlaceholder) GROUP BY status");
-    $stmt->execute($leadIds);
-    $statusStats = $stmt->fetchAll();
-}
-
-// Calls per day (last 30 days)
 $callsPerDay = [];
-if ($totalLeads > 0) {
+$outcomeStats = [];
+$followUpsToday = [];
+
+if (!empty($accessibleIds)) {
+    $placeholders = implode(',', array_fill(0, count($accessibleIds), '?'));
+    
+    // Leads by status
+    $stmt = $pdo->prepare("SELECT status, COUNT(*) as count FROM leads WHERE id IN ($placeholders) GROUP BY status");
+    $stmt->execute($accessibleIds);
+    $statusStats = $stmt->fetchAll();
+    
+    // Calls per day (last 30 days)
     $stmt = $pdo->prepare("SELECT DATE(created_at) as date, COUNT(*) as count 
-                           FROM calls WHERE lead_id IN ($leadIdsPlaceholder) 
+                           FROM calls WHERE lead_id IN ($placeholders) 
                            AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
                            GROUP BY DATE(created_at) ORDER BY date");
-    $stmt->execute($leadIds);
+    $stmt->execute($accessibleIds);
     $callsPerDay = $stmt->fetchAll();
+    
+    // Call outcomes distribution
+    $stmt = $pdo->prepare("SELECT outcome, COUNT(*) as count FROM calls WHERE lead_id IN ($placeholders) GROUP BY outcome");
+    $stmt->execute($accessibleIds);
+    $outcomeStats = $stmt->fetchAll();
+    
+    // Follow-ups due today
+    $stmt = $pdo->prepare("SELECT c.*, l.name as lead_name 
+                           FROM calls c 
+                           JOIN leads l ON c.lead_id = l.id 
+                           WHERE l.id IN ($placeholders) 
+                           AND c.follow_up_date = CURDATE()");
+    $stmt->execute($accessibleIds);
+    $followUpsToday = $stmt->fetchAll();
 }
 
 // Conversion rate
@@ -43,23 +52,6 @@ foreach ($statusStats as $stat) {
     }
 }
 $conversionRate = $totalLeads > 0 ? round(($converted / $totalLeads) * 100, 2) : 0;
-
-// Call outcomes distribution
-$outcomeStats = [];
-if ($totalLeads > 0) {
-    $stmt = $pdo->prepare("SELECT outcome, COUNT(*) as count FROM calls WHERE lead_id IN ($leadIdsPlaceholder) GROUP BY outcome");
-    $stmt->execute($leadIds);
-    $outcomeStats = $stmt->fetchAll();
-}
-
-// Follow-ups due today
-$stmt = $pdo->prepare("SELECT c.*, l.name as lead_name 
-                       FROM calls c 
-                       JOIN leads l ON c.lead_id = l.id 
-                       WHERE l.id IN ($leadIdsPlaceholder) 
-                       AND c.follow_up_date = CURDATE()");
-$stmt->execute($leadIds);
-$followUpsToday = $stmt->fetchAll();
 
 include 'includes/header.php';
 ?>
