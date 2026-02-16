@@ -1,6 +1,7 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'includes/config.php';
+require_once 'includes/functions.php';
 
 $action = $_GET['action'] ?? 'view';
 $id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
@@ -29,19 +30,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = 'Failed to add lead.';
             }
         } elseif ($action === 'edit' && $id) {
-            // Ensure lead belongs to user
-            $check = $pdo->prepare("SELECT id FROM leads WHERE id = ? AND user_id = ?");
-            $check->execute([$id, $_SESSION['user_id']]);
-            if (!$check->fetch()) {
-                $error = 'Lead not found.';
+            // Check edit permission
+            if (!canEditLead($pdo, $id, $_SESSION['user_id'])) {
+                die('You do not have permission to edit this lead.');
+            }
+            $stmt = $pdo->prepare("UPDATE leads SET name=?, company=?, phone=?, email=?, status=?, notes=? WHERE id=?");
+            if ($stmt->execute([$name, $company, $phone, $email, $status, $notes, $id])) {
+                header("Location: lead.php?id=$id&updated=1");
+                exit;
             } else {
-                $stmt = $pdo->prepare("UPDATE leads SET name=?, company=?, phone=?, email=?, status=?, notes=? WHERE id=?");
-                if ($stmt->execute([$name, $company, $phone, $email, $status, $notes, $id])) {
-                    header("Location: lead.php?id=$id&updated=1");
-                    exit;
-                } else {
-                    $error = 'Failed to update lead.';
-                }
+                $error = 'Failed to update lead.';
             }
         }
     }
@@ -50,11 +48,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Fetch lead data for editing or viewing
 $lead = null;
 if ($id) {
-    $stmt = $pdo->prepare("SELECT * FROM leads WHERE id = ? AND user_id = ?");
-    $stmt->execute([$id, $_SESSION['user_id']]);
+    $stmt = $pdo->prepare("SELECT * FROM leads WHERE id = ?");
+    $stmt->execute([$id]);
     $lead = $stmt->fetch();
     if (!$lead && $action !== 'add') {
         die('Lead not found.');
+    }
+    // Check view permission if viewing/editing existing lead
+    if ($lead && !canViewLead($pdo, $id, $_SESSION['user_id'])) {
+        die('You do not have permission to view this lead.');
     }
 }
 
@@ -62,6 +64,7 @@ if ($id) {
 if ($action === 'add') {
     $lead = [
         'id' => 0,
+        'user_id' => $_SESSION['user_id'],
         'name' => '',
         'company' => '',
         'phone' => '',
@@ -141,12 +144,18 @@ include 'includes/header.php';
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <h2>Lead Details</h2>
             <div>
-                <a href="lead.php?action=edit&id=<?= $lead['id'] ?>" class="btn-secondary">Edit</a>
+                <?php if (canEditLead($pdo, $lead['id'], $_SESSION['user_id'])): ?>
+                    <a href="lead.php?action=edit&id=<?= $lead['id'] ?>" class="btn-secondary">Edit</a>
+                <?php endif; ?>
                 <a href="log-call.php?lead_id=<?= $lead['id'] ?>" class="btn">Log Call</a>
             </div>
         </div>
 
         <table class="table" style="width: auto;">
+            <tr>
+                <th>Owner</th>
+                <td><?= $lead['user_id'] == $_SESSION['user_id'] ? 'You' : 'Shared with you' ?></td>
+            </tr>
             <tr>
                 <th>Company</th>
                 <td><?= htmlspecialchars($lead['company'] ?: '—') ?></td>
@@ -207,6 +216,120 @@ include 'includes/header.php';
             <p>No calls logged yet. <a href="log-call.php?lead_id=<?= $lead['id'] ?>">Log your first call</a>.</p>
         <?php endif; ?>
     </div>
+
+    <!-- Sharing Section (only visible to owner) -->
+    <?php if ($lead['user_id'] == $_SESSION['user_id']): ?>
+    <div class="card">
+        <h2>Sharing</h2>
+        <div id="share-list"></div>
+        
+        <h3>Share with another user</h3>
+        <form id="share-form">
+            <input type="hidden" name="lead_id" value="<?= $lead['id'] ?>">
+            <div class="form-group">
+                <label for="user_id">User</label>
+                <select id="user_id" name="user_id" required>
+                    <option value="">Select user...</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="permission">Permission</label>
+                <select id="permission" name="permission">
+                    <option value="view">View only</option>
+                    <option value="edit">View and edit</option>
+                </select>
+            </div>
+            <button type="submit" class="btn">Add Share</button>
+        </form>
+    </div>
+
+    <script>
+    // Load users and current shares
+    document.addEventListener('DOMContentLoaded', function() {
+        loadShares();
+        loadUsers();
+    });
+
+    function loadShares() {
+        fetch('share.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'action=list&lead_id=<?= $lead['id'] ?>'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                let html = '<h4>Currently shared with:</h4><ul>';
+                data.shares.forEach(share => {
+                    html += `<li>${share.name} (${share.email}) - ${share.permission} 
+                            <button onclick="removeShare(${share.user_id})">Remove</button></li>`;
+                });
+                html += '</ul>';
+                document.getElementById('share-list').innerHTML = html;
+            }
+        });
+    }
+
+    function loadUsers() {
+        fetch('share.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'action=get_users'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                let select = document.getElementById('user_id');
+                data.users.forEach(user => {
+                    let option = document.createElement('option');
+                    option.value = user.id;
+                    option.textContent = user.name + ' (' + user.email + ')';
+                    select.appendChild(option);
+                });
+            }
+        });
+    }
+
+    document.getElementById('share-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const formData = new FormData(this);
+        formData.append('action', 'add');
+        fetch('share.php', {
+            method: 'POST',
+            body: new URLSearchParams(formData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('Shared successfully');
+                loadShares();
+            } else {
+                alert('Error: ' + data.error);
+            }
+        });
+    });
+
+    function removeShare(userId) {
+        if (!confirm('Remove share from this user?')) return;
+        const formData = new FormData();
+        formData.append('action', 'remove');
+        formData.append('lead_id', '<?= $lead['id'] ?>');
+        formData.append('user_id', userId);
+        fetch('share.php', {
+            method: 'POST',
+            body: new URLSearchParams(formData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                loadShares();
+            } else {
+                alert('Error: ' + data.error);
+            }
+        });
+    }
+    </script>
+    <?php endif; ?>
 
 <?php endif; ?>
 

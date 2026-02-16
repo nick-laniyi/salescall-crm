@@ -1,3 +1,9 @@
+<?php
+// Start session if not already started
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -9,10 +15,11 @@
 <body>
     <nav class="navbar">
         <div class="container">
-            <a href="dashboard.php" class="navbar-brand">SalesCalls CRM</a>
+            <a href="dashboard.php" class="navbar-brand">Sales Calls CRM</a>
             <div class="navbar-menu">
                 <a href="dashboard.php">Dashboard</a>
                 <a href="leads.php">Leads</a>
+                <a href="analytics.php">Analytics</a>
                 <a href="profile.php">Profile</a>
                 <a href="logout.php">Logout</a>
             </div>

@@ -1,12 +1,13 @@
 <?php
-// leads.php - List and manage leads with inline editing
 require_once 'includes/auth.php';
 require_once 'includes/config.php';
+require_once 'includes/functions.php';
 
 // Handle bulk delete
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_selected'])) {
     $ids = $_POST['lead_ids'] ?? [];
     if (!empty($ids) && is_array($ids)) {
+        // Only delete if user owns these leads
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $stmt = $pdo->prepare("DELETE FROM leads WHERE id IN ($placeholders) AND user_id = ?");
         $params = array_merge($ids, [$_SESSION['user_id']]);
@@ -34,25 +35,33 @@ $search = $_GET['search'] ?? '';
 $status = $_GET['status'] ?? '';
 $show_imported = isset($_GET['imported']) && $_GET['imported'] == 1;
 
-// Build query
-$sql = "SELECT * FROM leads WHERE user_id = :user_id";
-$params = [':user_id' => $_SESSION['user_id']];
+// Build accessible leads query
+list($sql, $params) = getAccessibleLeadsQuery($pdo, $_SESSION['user_id']);
 
+// Add search and filters
+$whereAdded = strpos($sql, 'WHERE') !== false;
 if ($search) {
-    $sql .= " AND (name LIKE :search OR company LIKE :search OR email LIKE :search OR phone LIKE :search)";
+    $sql = $whereAdded 
+        ? str_replace("WHERE", "WHERE (l.name LIKE :search OR l.company LIKE :search OR l.email LIKE :search OR l.phone LIKE :search) AND ", $sql)
+        : $sql . " WHERE (l.name LIKE :search OR l.company LIKE :search OR l.email LIKE :search OR l.phone LIKE :search)";
     $params[':search'] = "%$search%";
+    $whereAdded = true;
 }
 if ($status && $status !== 'all') {
-    $sql .= " AND status = :status";
+    $sql = $whereAdded 
+        ? str_replace("WHERE", "WHERE l.status = :status AND ", $sql)
+        : $sql . " WHERE l.status = :status";
     $params[':status'] = $status;
+    $whereAdded = true;
 }
 if ($show_imported && isset($_SESSION['last_import_time'])) {
-    $sql .= " AND created_at >= :import_time";
+    $sql = $whereAdded 
+        ? str_replace("WHERE", "WHERE l.created_at >= :import_time AND ", $sql)
+        : $sql . " WHERE l.created_at >= :import_time";
     $params[':import_time'] = $_SESSION['last_import_time'];
 }
-$sql .= " ORDER BY created_at DESC";
+$sql .= " ORDER BY l.created_at DESC";
 
-// Execute query
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $leads = $stmt->fetchAll();
@@ -85,6 +94,8 @@ include 'includes/header.php';
             <a href="lead.php?action=add" class="btn">Add New Lead</a>
             <a href="import.php" class="btn-secondary">Import Leads</a>
             <a href="download_sample.php" class="btn-secondary">Download Sample CSV</a>
+            <a href="export.php" class="btn-secondary">Export to CSV</a>
+            <a href="analytics.php" class="btn-secondary">Analytics</a>
         </div>
         <form method="get" style="display: flex; gap: 10px; flex-wrap: wrap;">
             <input type="text" name="search" placeholder="Search leads..." value="<?= htmlspecialchars($search) ?>" style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
@@ -127,7 +138,12 @@ include 'includes/header.php';
                     <?php foreach ($leads as $lead): ?>
                     <tr data-lead-id="<?= $lead['id'] ?>">
                         <td><input type="checkbox" name="lead_ids[]" value="<?= $lead['id'] ?>" class="lead-checkbox"></td>
-                        <td class="editable" data-field="name"><?= htmlspecialchars($lead['name']) ?></td>
+                        <td>
+                            <?php if (!$lead['is_owner']): ?>
+                                <span class="shared-badge" title="Shared with you (<?= $lead['shared_permission'] ?>)">🔗</span>
+                            <?php endif; ?>
+                            <span class="editable" data-field="name"><?= htmlspecialchars($lead['name']) ?></span>
+                        </td>
                         <td class="editable" data-field="company"><?= htmlspecialchars($lead['company'] ?: '—') ?></td>
                         <td class="editable" data-field="phone"><?= htmlspecialchars($lead['phone'] ?: '—') ?></td>
                         <td class="editable" data-field="email"><?= htmlspecialchars($lead['email'] ?: '—') ?></td>
@@ -149,7 +165,9 @@ include 'includes/header.php';
                                     <a href="lead.php?action=edit&id=<?= $lead['id'] ?>">Edit</a>
                                     <a href="log-call.php?lead_id=<?= $lead['id'] ?>">Log Call</a>
                                     <a href="#" class="quick-note" data-lead-id="<?= $lead['id'] ?>">Add Quick Note</a>
-                                    <a href="#" class="delete-single" data-lead-id="<?= $lead['id'] ?>" onclick="return confirm('Delete this lead?')">Delete</a>
+                                    <?php if ($lead['is_owner']): ?>
+                                        <a href="#" class="delete-single" data-lead-id="<?= $lead['id'] ?>" onclick="return confirm('Delete this lead?')">Delete</a>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </td>
@@ -263,6 +281,13 @@ include 'includes/header.php';
     border-radius: 4px;
     font-size: inherit;
 }
+
+/* Shared badge */
+.shared-badge {
+    font-size: 1.2rem;
+    margin-right: 5px;
+    cursor: help;
+}
 </style>
 
 <script>
@@ -297,13 +322,10 @@ document.querySelectorAll('.status-select').forEach(select => {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                // Update the select's current data attribute
                 this.dataset.current = newStatus;
-                // Optional: show a temporary success message
                 showNotification('Status updated', 'success');
             } else {
                 alert('Error updating status: ' + data.error);
-                // Revert to previous value
                 this.value = this.dataset.current;
             }
         })
@@ -324,23 +346,19 @@ document.querySelectorAll('.editable').forEach(cell => {
         const leadId = this.closest('tr').dataset.leadId;
         const currentValue = this.innerText === '—' ? '' : this.innerText;
         
-        // Create input
         const input = document.createElement('input');
         input.type = 'text';
         input.value = currentValue;
         input.style.width = '100%';
         
-        // Replace content
         this.innerHTML = '';
         this.appendChild(input);
         this.classList.add('editing');
         input.focus();
         
-        // Handle save on blur or enter
         const saveEdit = () => {
             const newValue = input.value.trim();
             if (newValue === currentValue) {
-                // No change
                 this.innerHTML = newValue || '—';
                 this.classList.remove('editing');
                 return;
@@ -436,7 +454,7 @@ saveNoteBtn.addEventListener('click', function() {
     });
 });
 
-// Delete single lead
+// Delete single lead (only for owners)
 document.querySelectorAll('.delete-single').forEach(link => {
     link.addEventListener('click', function(e) {
         e.preventDefault();
