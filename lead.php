@@ -1,0 +1,213 @@
+<?php
+require_once 'includes/auth.php';
+require_once 'includes/config.php';
+
+$action = $_GET['action'] ?? 'view';
+$id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$error = '';
+$success = '';
+
+// Handle form submission for add/edit
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $name = trim($_POST['name'] ?? '');
+    $company = trim($_POST['company'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $status = $_POST['status'] ?? 'new';
+    $notes = trim($_POST['notes'] ?? '');
+
+    if (empty($name)) {
+        $error = 'Lead name is required.';
+    } else {
+        if ($action === 'add') {
+            $stmt = $pdo->prepare("INSERT INTO leads (user_id, name, company, phone, email, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            if ($stmt->execute([$_SESSION['user_id'], $name, $company, $phone, $email, $status, $notes])) {
+                $newId = $pdo->lastInsertId();
+                header("Location: lead.php?id=$newId&added=1");
+                exit;
+            } else {
+                $error = 'Failed to add lead.';
+            }
+        } elseif ($action === 'edit' && $id) {
+            // Ensure lead belongs to user
+            $check = $pdo->prepare("SELECT id FROM leads WHERE id = ? AND user_id = ?");
+            $check->execute([$id, $_SESSION['user_id']]);
+            if (!$check->fetch()) {
+                $error = 'Lead not found.';
+            } else {
+                $stmt = $pdo->prepare("UPDATE leads SET name=?, company=?, phone=?, email=?, status=?, notes=? WHERE id=?");
+                if ($stmt->execute([$name, $company, $phone, $email, $status, $notes, $id])) {
+                    header("Location: lead.php?id=$id&updated=1");
+                    exit;
+                } else {
+                    $error = 'Failed to update lead.';
+                }
+            }
+        }
+    }
+}
+
+// Fetch lead data for editing or viewing
+$lead = null;
+if ($id) {
+    $stmt = $pdo->prepare("SELECT * FROM leads WHERE id = ? AND user_id = ?");
+    $stmt->execute([$id, $_SESSION['user_id']]);
+    $lead = $stmt->fetch();
+    if (!$lead && $action !== 'add') {
+        die('Lead not found.');
+    }
+}
+
+// For add action, we don't have lead data
+if ($action === 'add') {
+    $lead = [
+        'id' => 0,
+        'name' => '',
+        'company' => '',
+        'phone' => '',
+        'email' => '',
+        'status' => 'new',
+        'notes' => ''
+    ];
+}
+
+// Fetch call history if viewing a lead
+$calls = [];
+if ($id && $action === 'view' && $lead) {
+    $stmt = $pdo->prepare("SELECT * FROM calls WHERE lead_id = ? ORDER BY created_at DESC");
+    $stmt->execute([$id]);
+    $calls = $stmt->fetchAll();
+}
+
+include 'includes/header.php';
+?>
+
+<?php if ($action === 'add' || $action === 'edit'): ?>
+    <h1><?= $action === 'add' ? 'Add New Lead' : 'Edit Lead' ?></h1>
+
+    <?php if ($error): ?>
+        <div class="alert alert-error"><?= htmlspecialchars($error) ?></div>
+    <?php endif; ?>
+
+    <div class="card">
+        <form method="post">
+            <div class="form-group">
+                <label for="name">Lead Name *</label>
+                <input type="text" id="name" name="name" value="<?= htmlspecialchars($lead['name']) ?>" required>
+            </div>
+            <div class="form-group">
+                <label for="company">Company</label>
+                <input type="text" id="company" name="company" value="<?= htmlspecialchars($lead['company']) ?>">
+            </div>
+            <div class="form-group">
+                <label for="phone">Phone</label>
+                <input type="text" id="phone" name="phone" value="<?= htmlspecialchars($lead['phone']) ?>">
+            </div>
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" value="<?= htmlspecialchars($lead['email']) ?>">
+            </div>
+            <div class="form-group">
+                <label for="status">Status</label>
+                <select id="status" name="status">
+                    <option value="new" <?= $lead['status'] === 'new' ? 'selected' : '' ?>>New</option>
+                    <option value="contacted" <?= $lead['status'] === 'contacted' ? 'selected' : '' ?>>Contacted</option>
+                    <option value="interested" <?= $lead['status'] === 'interested' ? 'selected' : '' ?>>Interested</option>
+                    <option value="not_interested" <?= $lead['status'] === 'not_interested' ? 'selected' : '' ?>>Not Interested</option>
+                    <option value="converted" <?= $lead['status'] === 'converted' ? 'selected' : '' ?>>Converted</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="notes">Notes</label>
+                <textarea id="notes" name="notes" rows="4"><?= htmlspecialchars($lead['notes']) ?></textarea>
+            </div>
+            <button type="submit" class="btn"><?= $action === 'add' ? 'Add Lead' : 'Update Lead' ?></button>
+            <a href="leads.php" class="btn-secondary">Cancel</a>
+        </form>
+    </div>
+
+<?php elseif ($action === 'view' && $lead): ?>
+    <h1><?= htmlspecialchars($lead['name']) ?></h1>
+    
+    <?php if (isset($_GET['added'])): ?>
+        <div class="alert alert-success">Lead added successfully.</div>
+    <?php elseif (isset($_GET['updated'])): ?>
+        <div class="alert alert-success">Lead updated successfully.</div>
+    <?php elseif (isset($_GET['call_logged'])): ?>
+        <div class="alert alert-success">Call logged successfully.</div>
+    <?php endif; ?>
+
+    <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2>Lead Details</h2>
+            <div>
+                <a href="lead.php?action=edit&id=<?= $lead['id'] ?>" class="btn-secondary">Edit</a>
+                <a href="log-call.php?lead_id=<?= $lead['id'] ?>" class="btn">Log Call</a>
+            </div>
+        </div>
+
+        <table class="table" style="width: auto;">
+            <tr>
+                <th>Company</th>
+                <td><?= htmlspecialchars($lead['company'] ?: '—') ?></td>
+            </tr>
+            <tr>
+                <th>Phone</th>
+                <td><?= htmlspecialchars($lead['phone'] ?: '—') ?></td>
+            </tr>
+            <tr>
+                <th>Email</th>
+                <td><?= htmlspecialchars($lead['email'] ?: '—') ?></td>
+            </tr>
+            <tr>
+                <th>Status</th>
+                <td><?= htmlspecialchars($lead['status']) ?></td>
+            </tr>
+            <tr>
+                <th>Notes</th>
+                <td><?= nl2br(htmlspecialchars($lead['notes'] ?: '—')) ?></td>
+            </tr>
+            <tr>
+                <th>Created</th>
+                <td><?= date('F j, Y g:i a', strtotime($lead['created_at'])) ?></td>
+            </tr>
+            <tr>
+                <th>Last Updated</th>
+                <td><?= date('F j, Y g:i a', strtotime($lead['updated_at'])) ?></td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>Call History</h2>
+        <?php if (count($calls) > 0): ?>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Outcome</th>
+                        <th>Duration (sec)</th>
+                        <th>Follow-up</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($calls as $call): ?>
+                    <tr>
+                        <td><?= date('M d, Y H:i', strtotime($call['created_at'])) ?></td>
+                        <td><?= htmlspecialchars($call['outcome']) ?></td>
+                        <td><?= htmlspecialchars($call['duration']) ?></td>
+                        <td><?= htmlspecialchars($call['follow_up_date'] ?: '—') ?></td>
+                        <td><?= nl2br(htmlspecialchars($call['notes'] ?: '—')) ?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php else: ?>
+            <p>No calls logged yet. <a href="log-call.php?lead_id=<?= $lead['id'] ?>">Log your first call</a>.</p>
+        <?php endif; ?>
+    </div>
+
+<?php endif; ?>
+
+<?php include 'includes/footer.php'; ?>

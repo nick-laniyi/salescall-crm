@@ -1,0 +1,13 @@
+# Ignore configuration with secrets
+/includes/config.php
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log
