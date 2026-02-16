@@ -1,5 +1,5 @@
 <?php
-// leads.php - List and manage leads
+// leads.php - List and manage leads with inline editing
 require_once 'includes/auth.php';
 require_once 'includes/config.php';
 
@@ -110,7 +110,7 @@ include 'includes/header.php';
                 <button type="submit" name="delete_selected" class="btn-danger" onclick="return confirm('Delete selected leads?')">Delete Selected</button>
                 <a href="?delete_all=confirm" class="btn-danger" onclick="return confirm('Delete ALL leads? This cannot be undone.')">Delete All</a>
             </div>
-            <table class="table">
+            <table class="table" id="leads-table">
                 <thead>
                     <tr>
                         <th><input type="checkbox" id="select-all"></th>
@@ -120,26 +120,38 @@ include 'includes/header.php';
                         <th>Email</th>
                         <th>Status</th>
                         <th>Created</th>
-                        <th>Actions</th>
+                        <th>Quick Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php foreach ($leads as $lead): ?>
-                    <tr>
+                    <tr data-lead-id="<?= $lead['id'] ?>">
                         <td><input type="checkbox" name="lead_ids[]" value="<?= $lead['id'] ?>" class="lead-checkbox"></td>
-                        <td><?= htmlspecialchars($lead['name']) ?></td>
-                        <td><?= htmlspecialchars($lead['company'] ?: '—') ?></td>
-                        <td><?= htmlspecialchars($lead['phone'] ?: '—') ?></td>
-                        <td><?= htmlspecialchars($lead['email'] ?: '—') ?></td>
+                        <td class="editable" data-field="name"><?= htmlspecialchars($lead['name']) ?></td>
+                        <td class="editable" data-field="company"><?= htmlspecialchars($lead['company'] ?: '—') ?></td>
+                        <td class="editable" data-field="phone"><?= htmlspecialchars($lead['phone'] ?: '—') ?></td>
+                        <td class="editable" data-field="email"><?= htmlspecialchars($lead['email'] ?: '—') ?></td>
                         <td>
-                            <span class="status-badge status-<?= htmlspecialchars($lead['status']) ?>">
-                                <?= htmlspecialchars($lead['status']) ?>
-                            </span>
+                            <select class="status-select" data-lead-id="<?= $lead['id'] ?>" data-current="<?= $lead['status'] ?>">
+                                <option value="new" <?= $lead['status'] === 'new' ? 'selected' : '' ?>>New</option>
+                                <option value="contacted" <?= $lead['status'] === 'contacted' ? 'selected' : '' ?>>Contacted</option>
+                                <option value="interested" <?= $lead['status'] === 'interested' ? 'selected' : '' ?>>Interested</option>
+                                <option value="not_interested" <?= $lead['status'] === 'not_interested' ? 'selected' : '' ?>>Not Interested</option>
+                                <option value="converted" <?= $lead['status'] === 'converted' ? 'selected' : '' ?>>Converted</option>
+                            </select>
                         </td>
                         <td><?= date('M d, Y', strtotime($lead['created_at'])) ?></td>
                         <td>
-                            <a href="lead.php?id=<?= $lead['id'] ?>" class="btn-secondary btn-small">View</a>
-                            <a href="lead.php?action=edit&id=<?= $lead['id'] ?>" class="btn-secondary btn-small">Edit</a>
+                            <div class="dropdown">
+                                <button class="btn-secondary btn-small dropdown-toggle">Actions ▼</button>
+                                <div class="dropdown-content">
+                                    <a href="lead.php?id=<?= $lead['id'] ?>">View Details</a>
+                                    <a href="lead.php?action=edit&id=<?= $lead['id'] ?>">Edit</a>
+                                    <a href="log-call.php?lead_id=<?= $lead['id'] ?>">Log Call</a>
+                                    <a href="#" class="quick-note" data-lead-id="<?= $lead['id'] ?>">Add Quick Note</a>
+                                    <a href="#" class="delete-single" data-lead-id="<?= $lead['id'] ?>" onclick="return confirm('Delete this lead?')">Delete</a>
+                                </div>
+                            </div>
                         </td>
                     </tr>
                     <?php endforeach; ?>
@@ -156,7 +168,112 @@ include 'includes/header.php';
     <?php endif; ?>
 </div>
 
+<!-- Quick Note Modal -->
+<div id="quickNoteModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3>Add Quick Note</h3>
+        <input type="hidden" id="noteLeadId">
+        <textarea id="noteText" rows="4" style="width: 100%;"></textarea>
+        <button id="saveNote" class="btn">Save Note</button>
+    </div>
+</div>
+
+<style>
+/* Dropdown styles */
+.dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.dropdown-content {
+    display: none;
+    position: absolute;
+    background-color: white;
+    min-width: 160px;
+    box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+    z-index: 1;
+    border-radius: 4px;
+}
+
+.dropdown-content a {
+    color: black;
+    padding: 8px 12px;
+    text-decoration: none;
+    display: block;
+    font-size: 0.9rem;
+}
+
+.dropdown-content a:hover {
+    background-color: #f1f1f1;
+}
+
+.dropdown:hover .dropdown-content {
+    display: block;
+}
+
+/* Modal styles */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.4);
+}
+
+.modal-content {
+    background-color: white;
+    margin: 15% auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 400px;
+    border-radius: 8px;
+    position: relative;
+}
+
+.close {
+    position: absolute;
+    right: 15px;
+    top: 10px;
+    font-size: 24px;
+    cursor: pointer;
+}
+
+/* Editable cell styles */
+.editable {
+    cursor: pointer;
+    position: relative;
+}
+
+.editable:hover {
+    background-color: #f0f0f0;
+}
+
+.editable.editing {
+    padding: 0;
+}
+
+.editable input {
+    width: 100%;
+    padding: 8px;
+    border: 2px solid #3b82f6;
+    border-radius: 4px;
+    font-size: inherit;
+}
+</style>
+
 <script>
+// Select all functionality
+document.getElementById('select-all').addEventListener('change', function() {
+    var checkboxes = document.getElementsByClassName('lead-checkbox');
+    for (var i = 0; i < checkboxes.length; i++) {
+        checkboxes[i].checked = this.checked;
+    }
+});
+
 function selectAll() {
     var checkboxes = document.getElementsByClassName('lead-checkbox');
     var selectAllCheckbox = document.getElementById('select-all');
@@ -166,12 +283,203 @@ function selectAll() {
     selectAllCheckbox.checked = true;
 }
 
-document.getElementById('select-all').addEventListener('change', function() {
-    var checkboxes = document.getElementsByClassName('lead-checkbox');
-    for (var i = 0; i < checkboxes.length; i++) {
-        checkboxes[i].checked = this.checked;
-    }
+// Inline status update via AJAX
+document.querySelectorAll('.status-select').forEach(select => {
+    select.addEventListener('change', function() {
+        const leadId = this.dataset.leadId;
+        const newStatus = this.value;
+        
+        fetch('quick-status.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lead_id: leadId, field: 'status', value: newStatus })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Update the select's current data attribute
+                this.dataset.current = newStatus;
+                // Optional: show a temporary success message
+                showNotification('Status updated', 'success');
+            } else {
+                alert('Error updating status: ' + data.error);
+                // Revert to previous value
+                this.value = this.dataset.current;
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Network error');
+            this.value = this.dataset.current;
+        });
+    });
 });
+
+// Inline editing for name, company, phone, email
+document.querySelectorAll('.editable').forEach(cell => {
+    cell.addEventListener('dblclick', function(e) {
+        if (this.classList.contains('editing')) return;
+        
+        const field = this.dataset.field;
+        const leadId = this.closest('tr').dataset.leadId;
+        const currentValue = this.innerText === '—' ? '' : this.innerText;
+        
+        // Create input
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentValue;
+        input.style.width = '100%';
+        
+        // Replace content
+        this.innerHTML = '';
+        this.appendChild(input);
+        this.classList.add('editing');
+        input.focus();
+        
+        // Handle save on blur or enter
+        const saveEdit = () => {
+            const newValue = input.value.trim();
+            if (newValue === currentValue) {
+                // No change
+                this.innerHTML = newValue || '—';
+                this.classList.remove('editing');
+                return;
+            }
+            
+            fetch('quick-status.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lead_id: leadId, field: field, value: newValue })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    this.innerHTML = newValue || '—';
+                    showNotification('Field updated', 'success');
+                } else {
+                    alert('Error updating: ' + data.error);
+                    this.innerHTML = currentValue || '—';
+                }
+                this.classList.remove('editing');
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Network error');
+                this.innerHTML = currentValue || '—';
+                this.classList.remove('editing');
+            });
+        };
+        
+        input.addEventListener('blur', saveEdit);
+        input.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                saveEdit();
+            }
+        });
+    });
+});
+
+// Quick note modal
+const modal = document.getElementById('quickNoteModal');
+const span = document.getElementsByClassName('close')[0];
+const saveNoteBtn = document.getElementById('saveNote');
+const noteLeadId = document.getElementById('noteLeadId');
+const noteText = document.getElementById('noteText');
+
+document.querySelectorAll('.quick-note').forEach(link => {
+    link.addEventListener('click', function(e) {
+        e.preventDefault();
+        const leadId = this.dataset.leadId;
+        noteLeadId.value = leadId;
+        noteText.value = '';
+        modal.style.display = 'block';
+    });
+});
+
+span.onclick = function() {
+    modal.style.display = 'none';
+}
+
+window.onclick = function(event) {
+    if (event.target == modal) {
+        modal.style.display = 'none';
+    }
+}
+
+saveNoteBtn.addEventListener('click', function() {
+    const leadId = noteLeadId.value;
+    const note = noteText.value.trim();
+    
+    if (!note) {
+        alert('Please enter a note');
+        return;
+    }
+    
+    fetch('quick-status.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead_id: leadId, field: 'notes', value: note })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showNotification('Note added', 'success');
+            modal.style.display = 'none';
+        } else {
+            alert('Error: ' + data.error);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Network error');
+    });
+});
+
+// Delete single lead
+document.querySelectorAll('.delete-single').forEach(link => {
+    link.addEventListener('click', function(e) {
+        e.preventDefault();
+        if (!confirm('Delete this lead?')) return;
+        
+        const leadId = this.dataset.leadId;
+        fetch('quick-status.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lead_id: leadId, field: 'delete', value: '' })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                this.closest('tr').remove();
+                showNotification('Lead deleted', 'success');
+            } else {
+                alert('Error: ' + data.error);
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Network error');
+        });
+    });
+});
+
+// Notification helper
+function showNotification(message, type) {
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type}`;
+    notification.style.position = 'fixed';
+    notification.style.top = '20px';
+    notification.style.right = '20px';
+    notification.style.zIndex = '9999';
+    notification.style.minWidth = '200px';
+    notification.innerText = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.remove();
+    }, 3000);
+}
 </script>
 
 <?php include 'includes/footer.php'; ?>
