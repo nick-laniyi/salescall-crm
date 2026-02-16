@@ -243,3 +243,17 @@ input:focus, select:focus, textarea:focus {
     background-color: #fef9c3;
     color: #854d0e;
 }
+
+.btn-danger {
+    background-color: #ef4444;
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #dc2626;
+}
+
+.btn-small {
+    padding: 4px 8px;
+    font-size: 0.875rem;
+}

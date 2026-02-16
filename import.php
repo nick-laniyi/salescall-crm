@@ -56,6 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                 $handle = fopen($file['tmp_name'], 'r');
                 if ($handle) {
                     $lineNumber = 0;
+                    $importedIds = [];
                     
                     // If has header, read and discard first line
                     if ($hasHeader) {
@@ -108,6 +109,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                         $stmt = $pdo->prepare("INSERT INTO leads (user_id, name, company, phone, email, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?)");
                         if ($stmt->execute([$_SESSION['user_id'], $name, $company, $phone, $email, $status, $notes])) {
                             $importedCount++;
+                            $importedIds[] = $pdo->lastInsertId();
                         } else {
                             $errors[] = "Line $lineNumber: Database error – failed to insert.";
                             $skippedCount++;
@@ -116,10 +118,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                     fclose($handle);
                     
                     if ($importedCount > 0) {
+                        // Store import time and IDs in session for highlighting
+                        $_SESSION['last_import_time'] = date('Y-m-d H:i:s');
+                        $_SESSION['last_import_ids'] = $importedIds;
                         $success[] = "$importedCount leads imported successfully.";
                     }
                     if ($skippedCount > 0) {
                         $success[] = "$skippedCount lines skipped (see errors for details).";
+                    }
+                    
+                    // Redirect to leads.php with success message
+                    if ($importedCount > 0) {
+                        header('Location: leads.php?imported=1&count=' . $importedCount);
+                        exit;
                     }
                 } else {
                     $errors[] = 'Could not open file.';
@@ -129,6 +140,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
     }
 }
 
+// If we get here, there was an error or no file uploaded
 include 'includes/header.php';
 ?>
 
