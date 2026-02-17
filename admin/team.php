@@ -58,40 +58,42 @@ include '../includes/header.php';
 
 <div class="card">
     <h2>Team Performance Overview</h2>
-    <table class="table">
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Total Leads</th>
-                <th>New</th>
-                <th>Interested</th>
-                <th>Converted</th>
-                <th>Conversion Rate</th>
-                <th>Total Calls</th>
-                <th>Follow-ups Today</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php foreach ($stats as $userId => $stat): ?>
-            <tr>
-                <td><?= htmlspecialchars($stat['name']) ?></td>
-                <td><?= htmlspecialchars($stat['email']) ?></td>
-                <td><?= $stat['leads']['total'] ?></td>
-                <td><?= $stat['leads']['new'] ?></td>
-                <td><?= $stat['leads']['interested'] ?></td>
-                <td><?= $stat['leads']['converted'] ?></td>
-                <td><?= $stat['conversion_rate'] ?>%</td>
-                <td><?= $stat['calls']['total_calls'] ?></td>
-                <td><?= $stat['follow_ups_today'] ?></td>
-                <td>
-                    <a href="../leads.php?user_id=<?= $userId ?>" class="btn-secondary btn-small">View Leads</a>
-                </td>
-            </tr>
-            <?php endforeach; ?>
-        </tbody>
-    </table>
+    <div class="table-container">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Total Leads</th>
+                    <th>New</th>
+                    <th>Interested</th>
+                    <th>Converted</th>
+                    <th>Conversion Rate</th>
+                    <th>Total Calls</th>
+                    <th>Follow-ups Today</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($stats as $userId => $stat): ?>
+                <tr>
+                    <td><?= htmlspecialchars($stat['name']) ?></td>
+                    <td><?= htmlspecialchars($stat['email']) ?></td>
+                    <td><?= $stat['leads']['total'] ?></td>
+                    <td><?= $stat['leads']['new'] ?></td>
+                    <td><?= $stat['leads']['interested'] ?></td>
+                    <td><?= $stat['leads']['converted'] ?></td>
+                    <td><?= $stat['conversion_rate'] ?>%</td>
+                    <td><?= $stat['calls']['total_calls'] ?></td>
+                    <td><?= $stat['follow_ups_today'] ?></td>
+                    <td>
+                        <a href="../leads.php?user_id=<?= $userId ?>" class="btn-secondary btn-small">View Leads</a>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
 </div>
 
 <div class="card">
@@ -129,5 +131,17 @@ const teamChart = new Chart(ctx, {
     }
 });
 </script>
+
+<style>
+/* Add table-container styles for consistency */
+.table-container {
+    overflow-x: auto;
+    margin-top: 10px;
+}
+
+.table {
+    min-width: 1000px; /* Ensures horizontal scroll on smaller screens */
+}
+</style>
 
 <?php include '../includes/footer.php'; ?>

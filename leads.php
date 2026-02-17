@@ -323,6 +323,8 @@ include 'includes/header.php';
     box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
     z-index: 1;
     border-radius: 4px;
+    right: 0; /* Align to right edge to prevent overflow on the right */
+    left: auto;
 }
 
 .dropdown-content a {
