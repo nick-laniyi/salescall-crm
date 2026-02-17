@@ -1,207 +1,235 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'includes/config.php';
-require_once 'includes/functions.php';
 
 $errors = [];
 $importedCount = 0;
 $skippedCount = 0;
 $step = isset($_POST['step']) ? (int)$_POST['step'] : 1;
 
-// Get all projects for the current user
-$projects = [];
-$stmt = $pdo->prepare("SELECT id, name FROM projects WHERE user_id = ? ORDER BY name");
-$stmt->execute([$_SESSION['user_id']]);
-$projects = $stmt->fetchAll();
+// Determine a writable temp directory
+function getWritableTempDir() {
+    // Try project temp_uploads first
+    $projectTemp = __DIR__ . '/temp_uploads';
+    if (is_dir($projectTemp) && is_writable($projectTemp)) {
+        return $projectTemp;
+    }
+    if (!is_dir($projectTemp)) {
+        if (mkdir($projectTemp, 0777, true)) {
+            return $projectTemp;
+        }
+    }
+    // Fallback to system temp
+    $sysTemp = sys_get_temp_dir() . '/salescalls_imports';
+    if (!is_dir($sysTemp)) {
+        mkdir($sysTemp, 0777, true);
+    }
+    return $sysTemp;
+}
 
-// Step 1: File upload and header parsing
+$tempDir = getWritableTempDir();
+
+// Get all projects
+$projects = [];
+if (isAdmin()) {
+    $stmt = $pdo->prepare("SELECT id, name FROM projects WHERE user_id = ? ORDER BY name");
+    $stmt->execute([$_SESSION['user_id']]);
+    $projects = $stmt->fetchAll();
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file']) && $step === 1) {
+    // Step 1: File uploaded, parse headers
     $file = $_FILES['lead_file'];
     $delimiter = $_POST['delimiter'] ?? ',';
-
-    // Validate delimiter
-    if (!in_array($delimiter, [',', ';', '\t', '|'])) {
-        $delimiter = ',';
-    }
-
-    // File upload validation
+    
+    // Validate upload
     if ($file['error'] !== UPLOAD_ERR_OK) {
         $errors[] = 'File upload failed.';
-    } elseif ($file['size'] > 2 * 1024 * 1024) {
-        $errors[] = 'File size exceeds 2MB limit.';
     } else {
-        $finfo = finfo_open(FILEINFO_MIME_TYPE);
-        $mime = finfo_file($finfo, $file['tmp_name']);
-        finfo_close($finfo);
-
-        $allowedMimes = ['text/csv', 'text/plain', 'application/csv', 'application/vnd.ms-excel'];
-        if (!in_array($mime, $allowedMimes)) {
-            $errors[] = 'Only CSV or text files are allowed.';
+        // Check file size (limit 2MB)
+        if ($file['size'] > 2 * 1024 * 1024) {
+            $errors[] = 'File size exceeds 2MB limit.';
         } else {
-            // Parse headers
-            $handle = fopen($file['tmp_name'], 'r');
-            $headers = fgetcsv($handle, 0, $delimiter);
-            fclose($handle);
-
-            if (!$headers) {
-                $errors[] = 'Could not parse CSV headers.';
+            // Generate unique filename and move to temp directory
+            $tempFilename = uniqid('import_') . '_' . basename($file['name']);
+            $tempPath = $tempDir . '/' . $tempFilename;
+            
+            if (move_uploaded_file($file['tmp_name'], $tempPath)) {
+                // Parse first row to get headers
+                $handle = fopen($tempPath, 'r');
+                if ($handle) {
+                    $headers = fgetcsv($handle, 0, $delimiter);
+                    fclose($handle);
+                    
+                    if (!$headers) {
+                        $errors[] = "Could not parse CSV headers.";
+                        unlink($tempPath);
+                    } else {
+                        // Store file info in session for next step
+                        $_SESSION['import_file'] = [
+                            'path' => $tempPath,
+                            'name' => $file['name'],
+                            'delimiter' => $delimiter,
+                            'headers' => $headers
+                        ];
+                        $step = 2;
+                    }
+                } else {
+                    $errors[] = "Could not open uploaded file.";
+                    unlink($tempPath);
+                }
             } else {
-                // Store file info in session for next step
-                $_SESSION['import_file'] = [
-                    'tmp_name' => $file['tmp_name'],
-                    'name' => $file['name'],
-                    'delimiter' => $delimiter,
-                    'headers' => $headers
-                ];
-                $step = 2;
+                $errors[] = "Failed to move uploaded file. Please check directory permissions.";
             }
         }
     }
 }
 
-// Step 2: Confirm mapping and import
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_import']) && $step === 2) {
+    // Step 2: User confirmed mapping and project
     $project_action = $_POST['project_action'] ?? 'existing';
     $project_id = null;
-
-    // Validate project selection/creation
-    if ($project_action === 'existing') {
-        $project_id = (int)($_POST['project_id'] ?? 0);
-        if (!$project_id) {
-            $errors[] = 'Please select a project.';
-        } else {
-            // Verify project belongs to user
-            $stmt = $pdo->prepare("SELECT id FROM projects WHERE id = ? AND user_id = ?");
-            $stmt->execute([$project_id, $_SESSION['user_id']]);
-            if (!$stmt->fetch()) {
-                $errors[] = 'Selected project not found.';
-            }
-        }
+    
+    if (!isset($_SESSION['import_file'])) {
+        $errors[] = "Session expired. Please upload again.";
+        $step = 1;
     } else {
-        $project_name = trim($_POST['new_project_name'] ?? '');
-        if (empty($project_name)) {
-            $errors[] = 'New project name is required.';
-        }
-
-        $col_names = $_POST['col_name'] ?? [];
-        $col_types = $_POST['col_type'] ?? [];
-        $col_options = $_POST['col_options'] ?? [];
-
-        if (empty($col_names)) {
-            $errors[] = 'No columns defined.';
-        }
-
-        if (empty($errors)) {
-            // Create new project and columns
-            $pdo->beginTransaction();
-            try {
-                $stmt = $pdo->prepare("INSERT INTO projects (user_id, name, description) VALUES (?, ?, ?)");
-                $stmt->execute([$_SESSION['user_id'], $project_name, 'Imported project']);
-                $project_id = $pdo->lastInsertId();
-
-                $colStmt = $pdo->prepare("INSERT INTO project_columns (project_id, name, column_type, options, sort_order) VALUES (?, ?, ?, ?, ?)");
-                $order = 0;
-                foreach ($col_names as $i => $col_name) {
-                    if (empty(trim($col_name))) continue;
-                    $type = $col_types[$i] ?? 'text';
-                    $options = null;
-                    if ($type === 'select' && !empty($col_options[$i])) {
-                        $options = json_encode(array_map('trim', explode("\n", trim($col_options[$i]))));
-                    }
-                    $colStmt->execute([$project_id, trim($col_name), $type, $options, $order++]);
-                }
-                $pdo->commit();
-            } catch (Exception $e) {
-                $pdo->rollBack();
-                $errors[] = 'Failed to create project: ' . $e->getMessage();
-            }
-        }
-    }
-
-    // If no errors, proceed with import
-    if (empty($errors) && $project_id && isset($_SESSION['import_file'])) {
         $fileData = $_SESSION['import_file'];
-        $handle = fopen($fileData['tmp_name'], 'r');
-        $headers = $fileData['headers'];
-        $delimiter = $fileData['delimiter'];
-
-        // Skip header row
-        fgetcsv($handle, 0, $delimiter);
-
-        $importedCount = 0;
-        $skippedCount = 0;
-        $lineNumber = 1;
-
-        // Prepare statements
-        $leadStmt = $pdo->prepare("INSERT INTO leads (user_id, project_id, name, company, phone, email, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-        $valueStmt = $pdo->prepare("INSERT INTO lead_column_values (lead_id, column_id, value) VALUES (?, ?, ?)");
-
-        // Get project columns for mapping (name => id)
-        $colStmt = $pdo->prepare("SELECT id, name FROM project_columns WHERE project_id = ?");
-        $colStmt->execute([$project_id]);
-        $projectColumns = [];
-        while ($row = $colStmt->fetch()) {
-            $projectColumns[strtolower($row['name'])] = $row['id'];
-        }
-
-        while (($data = fgetcsv($handle, 0, $delimiter)) !== false) {
-            $lineNumber++;
-            if (count($data) < 1) continue;
-
-            // Map standard fields (assuming order: name, company, phone, email, status, notes)
-            $name = trim($data[0] ?? '');
-            $company = trim($data[1] ?? '');
-            $phone = trim($data[2] ?? '');
-            $email = trim($data[3] ?? '');
-            $statusRaw = trim($data[4] ?? '');
-            $notes = trim($data[5] ?? '');
-
-            if (empty($name)) {
-                $skippedCount++;
-                continue;
+        $tempPath = $fileData['path'];
+        
+        if ($project_action === 'existing') {
+            $project_id = (int)($_POST['project_id'] ?? 0);
+            if (!$project_id) {
+                $errors[] = "Please select a project.";
             }
-
-            // Validate status
-            $validStatuses = ['new', 'contacted', 'interested', 'not_interested', 'converted'];
-            $status = 'new';
-            if (!empty($statusRaw)) {
-                $lowerStatus = strtolower($statusRaw);
-                if (in_array($lowerStatus, $validStatuses)) {
-                    $status = $lowerStatus;
-                } else {
-                    // Try to map
-                    if (strpos($lowerStatus, 'interest') !== false) $status = 'interested';
-                    elseif (strpos($lowerStatus, 'contact') !== false) $status = 'contacted';
-                    elseif (strpos($lowerStatus, 'convert') !== false) $status = 'converted';
-                    elseif (strpos($lowerStatus, 'not') !== false) $status = 'not_interested';
+        } else {
+            // Create new project
+            $project_name = trim($_POST['new_project_name'] ?? '');
+            if (empty($project_name)) {
+                $errors[] = "New project name required.";
+            }
+            
+            // Get column mappings
+            $col_names = $_POST['col_name'] ?? [];
+            $col_types = $_POST['col_type'] ?? [];
+            $col_options = $_POST['col_options'] ?? [];
+            
+            if (empty($col_names)) {
+                $errors[] = "No columns defined.";
+            }
+            
+            if (empty($errors)) {
+                // Create project and columns
+                $pdo->beginTransaction();
+                try {
+                    $stmt = $pdo->prepare("INSERT INTO projects (user_id, name, description) VALUES (?, ?, ?)");
+                    $stmt->execute([$_SESSION['user_id'], $project_name, 'Imported project']);
+                    $project_id = $pdo->lastInsertId();
+                    
+                    $colStmt = $pdo->prepare("INSERT INTO project_columns (project_id, name, column_type, options, sort_order) VALUES (?, ?, ?, ?, ?)");
+                    $order = 0;
+                    foreach ($col_names as $i => $col_name) {
+                        if (empty(trim($col_name))) continue;
+                        $type = $col_types[$i] ?? 'text';
+                        $options = null;
+                        if ($type === 'select' && !empty($col_options[$i])) {
+                            $options = json_encode(array_map('trim', explode("\n", trim($col_options[$i]))));
+                        }
+                        $colStmt->execute([$project_id, trim($col_name), $type, $options, $order++]);
+                    }
+                    $pdo->commit();
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    $errors[] = "Failed to create project: " . $e->getMessage();
                 }
             }
-
-            // Insert lead
-            $leadStmt->execute([$_SESSION['user_id'], $project_id, $name, $company, $phone, $email, $status, $notes]);
-            $leadId = $pdo->lastInsertId();
-
-            // Insert custom values for remaining columns (index 6+)
-            for ($i = 6; $i < count($data); $i++) {
-                $headerName = $headers[$i] ?? '';
-                if (empty($headerName)) continue;
-                $value = trim($data[$i] ?? '');
-                if (empty($value)) continue;
-
-                $headerLower = strtolower($headerName);
-                if (isset($projectColumns[$headerLower])) {
-                    $valueStmt->execute([$leadId, $projectColumns[$headerLower], $value]);
-                }
-            }
-            $importedCount++;
         }
-        fclose($handle);
-
-        // Clean up session
-        unset($_SESSION['import_file']);
-
-        header("Location: leads.php?imported=1&count=$importedCount&skipped=$skippedCount");
-        exit;
+        
+        if (empty($errors) && $project_id && file_exists($tempPath)) {
+            // Now perform the actual import
+            $handle = fopen($tempPath, 'r');
+            $headers = $fileData['headers'];
+            $delimiter = $fileData['delimiter'];
+            
+            // Skip header row
+            fgetcsv($handle, 0, $delimiter);
+            
+            $importedCount = 0;
+            $skippedCount = 0;
+            $lineNumber = 1;
+            
+            // Prepare insert statements
+            $leadStmt = $pdo->prepare("INSERT INTO leads (user_id, project_id, name, company, phone, email, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+            $valueStmt = $pdo->prepare("INSERT INTO lead_column_values (lead_id, column_id, value) VALUES (?, ?, ?)");
+            
+            // Get project columns (for mapping)
+            $colStmt = $pdo->prepare("SELECT id, name FROM project_columns WHERE project_id = ?");
+            $colStmt->execute([$project_id]);
+            $projectColumns = $colStmt->fetchAll(PDO::FETCH_KEY_PAIR); // name => id
+            
+            while (($data = fgetcsv($handle, 0, $delimiter)) !== false) {
+                $lineNumber++;
+                if (count($data) < 1) continue;
+                
+                // Extract standard fields (assuming first few columns)
+                $name = trim($data[0] ?? '');
+                $company = trim($data[1] ?? '');
+                $phone = trim($data[2] ?? '');
+                $email = trim($data[3] ?? '');
+                $status = trim($data[4] ?? 'new');
+                $notes = trim($data[5] ?? '');
+                
+                if (empty($name)) {
+                    $skippedCount++;
+                    continue;
+                }
+                
+                // Validate status
+                $validStatuses = ['new', 'contacted', 'interested', 'not_interested', 'converted'];
+                if (!in_array($status, $validStatuses)) {
+                    $status = 'new';
+                }
+                
+                // Insert lead
+                $leadStmt->execute([$_SESSION['user_id'], $project_id, $name, $company, $phone, $email, $status, $notes]);
+                $leadId = $pdo->lastInsertId();
+                
+                // Insert custom values based on remaining columns (starting from index 6)
+                for ($i = 6; $i < count($data); $i++) {
+                    $headerName = $headers[$i] ?? '';
+                    if (empty($headerName)) continue;
+                    $value = trim($data[$i] ?? '');
+                    if (empty($value)) continue;
+                    
+                    // Find column id by header name (case-insensitive)
+                    $colId = null;
+                    foreach ($projectColumns as $colName => $cid) {
+                        if (strcasecmp($colName, $headerName) === 0) {
+                            $colId = $cid;
+                            break;
+                        }
+                    }
+                    if ($colId) {
+                        $valueStmt->execute([$leadId, $colId, $value]);
+                    }
+                }
+                $importedCount++;
+            }
+            fclose($handle);
+            
+            // Clean up temp file
+            unlink($tempPath);
+            unset($_SESSION['import_file']);
+            
+            header("Location: leads.php?imported=1&count=$importedCount&skipped=$skippedCount");
+            exit;
+        } else {
+            if (!file_exists($tempPath)) {
+                $errors[] = "Temporary file missing. Please upload again.";
+                unset($_SESSION['import_file']);
+                $step = 1;
+            }
+        }
     }
 }
 
@@ -244,7 +272,7 @@ include 'includes/header.php';
         </form>
     </div>
 <?php elseif ($step === 2 && isset($_SESSION['import_file'])): ?>
-    <!-- Step 2: Map columns and choose/create project -->
+    <!-- Step 2: Map columns and choose project -->
     <?php
     $headers = $_SESSION['import_file']['headers'];
     ?>
@@ -253,14 +281,14 @@ include 'includes/header.php';
         <form method="post">
             <input type="hidden" name="step" value="2">
             <input type="hidden" name="confirm_import" value="1">
-
+            
             <div class="form-group">
                 <label>Project</label>
                 <div style="margin-bottom: 10px;">
                     <label><input type="radio" name="project_action" value="existing" checked onchange="toggleProjectOptions()"> Select existing project</label>
                     <label><input type="radio" name="project_action" value="new" onchange="toggleProjectOptions()"> Create new project</label>
                 </div>
-
+                
                 <div id="existing-project-group">
                     <select name="project_id" class="form-control">
                         <option value="">-- Select --</option>
@@ -269,7 +297,7 @@ include 'includes/header.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
-
+                
                 <div id="new-project-group" style="display: none;">
                     <div class="form-group">
                         <label for="new_project_name">New Project Name</label>
@@ -303,35 +331,29 @@ include 'includes/header.php';
                     </div>
                 </div>
             </div>
-
+            
             <button type="submit" class="btn">Import Leads</button>
             <a href="import.php" class="btn-secondary">Start Over</a>
         </form>
     </div>
-
+    
     <script>
     function toggleProjectOptions() {
         const isNew = document.querySelector('input[name="project_action"]:checked').value === 'new';
         document.getElementById('existing-project-group').style.display = isNew ? 'none' : 'block';
         document.getElementById('new-project-group').style.display = isNew ? 'block' : 'none';
     }
-
+    
     function toggleOptions(select) {
         const optionsDiv = select.closest('.column-mapping').querySelector('.col-options');
         optionsDiv.style.display = select.value === 'select' ? 'block' : 'none';
     }
-
-    // Initialize visibility for existing options
+    
+    // Initialize options visibility
     document.querySelectorAll('.col-type').forEach(select => {
         toggleOptions(select);
     });
     </script>
 <?php endif; ?>
-
-<div class="card">
-    <h3>Need a template?</h3>
-    <p><a href="download_sample.php" class="btn-secondary">Download Sample CSV</a></p>
-    <p>The sample includes a header row and a few example leads.</p>
-</div>
 
 <?php include 'includes/footer.php'; ?>
