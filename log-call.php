@@ -1,23 +1,23 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'includes/config.php';
+require_once 'includes/functions.php';
 
 $lead_id = isset($_GET['lead_id']) ? (int)$_GET['lead_id'] : 0;
 
-// Verify lead belongs to user
+// Verify lead access
 if ($lead_id) {
-    $stmt = $pdo->prepare("SELECT id, name FROM leads WHERE id = ? AND user_id = ?");
-    $stmt->execute([$lead_id, $_SESSION['user_id']]);
-    $lead = $stmt->fetch();
-    if (!$lead) {
+    if (!canViewLead($pdo, $lead_id, $_SESSION['user_id'])) {
         die('Lead not found.');
     }
+    $stmt = $pdo->prepare("SELECT name FROM leads WHERE id = ?");
+    $stmt->execute([$lead_id]);
+    $lead = $stmt->fetch();
 } else {
     die('No lead specified.');
 }
 
 $error = '';
-$success = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $outcome = $_POST['outcome'] ?? '';
@@ -30,8 +30,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $stmt = $pdo->prepare("INSERT INTO calls (lead_id, user_id, outcome, duration, follow_up_date, notes) VALUES (?, ?, ?, ?, ?, ?)");
         if ($stmt->execute([$lead_id, $_SESSION['user_id'], $outcome, $duration, $follow_up ?: null, $notes])) {
-            // Optionally update lead status based on outcome
-            // For simplicity, we'll leave status update to user.
             header("Location: lead.php?id=$lead_id&call_logged=1");
             exit;
         } else {
@@ -50,7 +48,13 @@ include 'includes/header.php';
 <?php endif; ?>
 
 <div class="card">
-    <form method="post">
+    <div style="margin-bottom: 20px;">
+        <button id="startTimer" class="btn">Start Call Timer</button>
+        <button id="stopTimer" class="btn-secondary" disabled>Stop Timer</button>
+        <span id="timerDisplay" style="font-size: 1.5rem; margin-left: 20px;">00:00</span>
+    </div>
+
+    <form method="post" id="callForm">
         <div class="form-group">
             <label for="outcome">Call Outcome *</label>
             <select id="outcome" name="outcome" required>
@@ -65,7 +69,7 @@ include 'includes/header.php';
         </div>
         <div class="form-group">
             <label for="duration">Duration (seconds)</label>
-            <input type="number" id="duration" name="duration" value="0" min="0">
+            <input type="number" id="duration" name="duration" value="0" min="0" readonly>
         </div>
         <div class="form-group">
             <label for="follow_up_date">Follow-up Date (if any)</label>
@@ -79,5 +83,44 @@ include 'includes/header.php';
         <a href="lead.php?id=<?= $lead_id ?>" class="btn-secondary">Cancel</a>
     </form>
 </div>
+
+<script>
+let timerInterval;
+let startTime;
+let running = false;
+
+document.getElementById('startTimer').addEventListener('click', function() {
+    startTime = Date.now();
+    running = true;
+    document.getElementById('startTimer').disabled = true;
+    document.getElementById('stopTimer').disabled = false;
+    
+    timerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        const minutes = Math.floor(elapsed / 60);
+        const seconds = elapsed % 60;
+        document.getElementById('timerDisplay').textContent = 
+            `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }, 1000);
+});
+
+document.getElementById('stopTimer').addEventListener('click', function() {
+    clearInterval(timerInterval);
+    running = false;
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    document.getElementById('duration').value = elapsed;
+    document.getElementById('startTimer').disabled = false;
+    document.getElementById('stopTimer').disabled = true;
+});
+
+// If user tries to submit without stopping timer, stop automatically
+document.getElementById('callForm').addEventListener('submit', function(e) {
+    if (running) {
+        clearInterval(timerInterval);
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        document.getElementById('duration').value = elapsed;
+    }
+});
+</script>
 
 <?php include 'includes/footer.php'; ?>

@@ -197,72 +197,95 @@ include 'includes/header.php';
                     <?php endif; ?>
                 <?php endif; ?>
             </div>
-            <table class="table" id="leads-table">
-                <thead>
-                    <tr>
-                        <th><input type="checkbox" id="select-all"></th>
-                        <th>Name</th>
-                        <th>Company</th>
-                        <th>Phone</th>
-                        <th>Email</th>
-                        <th>Status</th>
-                        <?php if (isAdmin()): ?>
-                            <th>Owner</th>
-                        <?php endif; ?>
-                        <th>Created</th>
-                        <th>Quick Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($leads as $lead): ?>
-                    <tr data-lead-id="<?= $lead['id'] ?>">
-                        <td><input type="checkbox" name="lead_ids[]" value="<?= $lead['id'] ?>" class="lead-checkbox"></td>
-                        <td>
-                            <?php if (!$lead['is_owner'] && !isAdmin()): ?>
-                                <span class="shared-badge" title="Shared with you (<?= $lead['shared_permission'] ?>)">🔗</span>
+            <div class="table-container">
+                <table class="table" id="leads-table">
+                    <thead>
+                        <tr>
+                            <th><input type="checkbox" id="select-all"></th>
+                            <th>Name</th>
+                            <th>Company</th>
+                            <th>Phone</th>
+                            <th>Email</th>
+                            <th>Status</th>
+                            <?php if (isAdmin()): ?>
+                                <th>Owner</th>
                             <?php endif; ?>
-                            <span class="editable" data-field="name"><?= htmlspecialchars($lead['name']) ?></span>
-                        </td>
-                        <td class="editable" data-field="company"><?= htmlspecialchars($lead['company'] ?: '—') ?></td>
-                        <td class="editable" data-field="phone"><?= htmlspecialchars($lead['phone'] ?: '—') ?></td>
-                        <td class="editable" data-field="email"><?= htmlspecialchars($lead['email'] ?: '—') ?></td>
-                        <td>
-                            <select class="status-select" data-lead-id="<?= $lead['id'] ?>" data-current="<?= $lead['status'] ?>">
-                                <option value="new" <?= $lead['status'] === 'new' ? 'selected' : '' ?>>New</option>
-                                <option value="contacted" <?= $lead['status'] === 'contacted' ? 'selected' : '' ?>>Contacted</option>
-                                <option value="interested" <?= $lead['status'] === 'interested' ? 'selected' : '' ?>>Interested</option>
-                                <option value="not_interested" <?= $lead['status'] === 'not_interested' ? 'selected' : '' ?>>Not Interested</option>
-                                <option value="converted" <?= $lead['status'] === 'converted' ? 'selected' : '' ?>>Converted</option>
-                            </select>
-                        </td>
-                        <?php if (isAdmin()): ?>
+                            <th>Created</th>
+                            <th>Quick Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($leads as $lead): 
+                            $rowClass = 'row-' . str_replace('_', '-', $lead['status']);
+                        ?>
+                        <tr data-lead-id="<?= $lead['id'] ?>" class="<?= $rowClass ?>">
+                            <td><input type="checkbox" name="lead_ids[]" value="<?= $lead['id'] ?>" class="lead-checkbox"></td>
                             <td>
-                                <select class="owner-select" data-lead-id="<?= $lead['id'] ?>">
-                                    <?php foreach ($users as $user): ?>
-                                        <option value="<?= $user['id'] ?>" <?= $lead['user_id'] == $user['id'] ? 'selected' : '' ?>><?= htmlspecialchars($user['name']) ?></option>
-                                    <?php endforeach; ?>
+                                <?php if (!$lead['is_owner'] && !isAdmin()): ?>
+                                    <span class="shared-badge" title="Shared with you (<?= $lead['shared_permission'] ?>)">🔗</span>
+                                <?php endif; ?>
+                                <span class="editable" data-field="name"><?= htmlspecialchars($lead['name']) ?></span>
+                            </td>
+                            <td class="editable" data-field="company"><?= htmlspecialchars($lead['company'] ?: '—') ?></td>
+                            <td>
+                                <?php if (!empty($lead['phone']) && $lead['phone'] !== '—'): ?>
+                                    <div class="contact-actions">
+                                        <a href="tel:<?= urlencode($lead['phone']) ?>" class="contact-icon" title="Call">📞</a>
+                                        <a href="https://wa.me/<?= preg_replace('/[^0-9]/', '', $lead['phone']) ?>" target="_blank" class="contact-icon whatsapp" title="WhatsApp">💬</a>
+                                        <span class="editable" data-field="phone"><?= htmlspecialchars($lead['phone']) ?></span>
+                                    </div>
+                                <?php else: ?>
+                                    <span class="editable" data-field="phone">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if (!empty($lead['email']) && $lead['email'] !== '—'): ?>
+                                    <div class="contact-actions">
+                                        <span class="contact-icon email copy-email" data-email="<?= htmlspecialchars($lead['email']) ?>" title="Copy email">📧</span>
+                                        <span class="editable" data-field="email"><?= htmlspecialchars($lead['email']) ?></span>
+                                    </div>
+                                <?php else: ?>
+                                    <span class="editable" data-field="email">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <select class="status-select" data-lead-id="<?= $lead['id'] ?>" data-current="<?= $lead['status'] ?>">
+                                    <option value="new" <?= $lead['status'] === 'new' ? 'selected' : '' ?>>New</option>
+                                    <option value="contacted" <?= $lead['status'] === 'contacted' ? 'selected' : '' ?>>Contacted</option>
+                                    <option value="interested" <?= $lead['status'] === 'interested' ? 'selected' : '' ?>>Interested</option>
+                                    <option value="not_interested" <?= $lead['status'] === 'not_interested' ? 'selected' : '' ?>>Not Interested</option>
+                                    <option value="converted" <?= $lead['status'] === 'converted' ? 'selected' : '' ?>>Converted</option>
                                 </select>
                             </td>
-                        <?php endif; ?>
-                        <td><?= date('M d, Y', strtotime($lead['created_at'])) ?></td>
-                        <td>
-                            <div class="dropdown">
-                                <button class="btn-secondary btn-small dropdown-toggle">Actions ▼</button>
-                                <div class="dropdown-content">
-                                    <a href="lead.php?id=<?= $lead['id'] ?>">View Details</a>
-                                    <a href="lead.php?action=edit&id=<?= $lead['id'] ?>">Edit</a>
-                                    <a href="log-call.php?lead_id=<?= $lead['id'] ?>">Log Call</a>
-                                    <a href="#" class="quick-note" data-lead-id="<?= $lead['id'] ?>">Add Quick Note</a>
-                                    <?php if (canDeleteLead($pdo, $lead['id'], $_SESSION['user_id'])): ?>
-                                        <a href="#" class="delete-single" data-lead-id="<?= $lead['id'] ?>" onclick="return confirm('Delete this lead?')">Delete</a>
-                                    <?php endif; ?>
+                            <?php if (isAdmin()): ?>
+                                <td>
+                                    <select class="owner-select" data-lead-id="<?= $lead['id'] ?>">
+                                        <?php foreach ($users as $user): ?>
+                                            <option value="<?= $user['id'] ?>" <?= $lead['user_id'] == $user['id'] ? 'selected' : '' ?>><?= htmlspecialchars($user['name']) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </td>
+                            <?php endif; ?>
+                            <td><?= date('M d, Y', strtotime($lead['created_at'])) ?></td>
+                            <td>
+                                <div class="dropdown">
+                                    <button class="btn-secondary btn-small dropdown-toggle">Actions ▼</button>
+                                    <div class="dropdown-content">
+                                        <a href="lead.php?id=<?= $lead['id'] ?>">View Details</a>
+                                        <a href="lead.php?action=edit&id=<?= $lead['id'] ?>">Edit</a>
+                                        <a href="log-call.php?lead_id=<?= $lead['id'] ?>">Log Call</a>
+                                        <a href="#" class="quick-note" data-lead-id="<?= $lead['id'] ?>">Add Quick Note</a>
+                                        <?php if (canDeleteLead($pdo, $lead['id'], $_SESSION['user_id'])): ?>
+                                            <a href="#" class="delete-single" data-lead-id="<?= $lead['id'] ?>" onclick="return confirm('Delete this lead?')">Delete</a>
+                                        <?php endif; ?>
+                                    </div>
                                 </div>
-                            </div>
-                        </td>
-                    </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
         </form>
     <?php else: ?>
         <p>No leads found. 
@@ -383,6 +406,62 @@ include 'includes/header.php';
     font-size: 0.9rem;
     border-radius: 4px;
 }
+
+/* Contact actions */
+.contact-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.contact-icon {
+    font-size: 1.2rem;
+    text-decoration: none;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+}
+
+.contact-icon:hover {
+    opacity: 1;
+}
+
+.contact-icon.whatsapp {
+    color: #25D366;
+}
+
+.contact-icon.email {
+    color: #333;
+}
+
+/* Status row colors */
+.row-new {
+    background-color: #e3f2fd;  /* light blue */
+}
+.row-contacted {
+    background-color: #fff3e0;  /* light orange */
+}
+.row-interested {
+    background-color: #e8f5e8;  /* light green */
+}
+.row-not-interested {
+    background-color: #ffebee;  /* light red */
+    opacity: 0.7;
+}
+.row-converted {
+    background-color: #f3e5f5;  /* light purple */
+    font-weight: 500;
+}
+
+/* Table container for horizontal scroll */
+.table-container {
+    overflow-x: auto;
+    margin-top: 10px;
+}
+
+.table {
+    min-width: 1000px; /* Ensures horizontal scroll on smaller screens */
+}
 </style>
 
 <script>
@@ -418,6 +497,10 @@ document.querySelectorAll('.status-select').forEach(select => {
         .then(data => {
             if (data.success) {
                 this.dataset.current = newStatus;
+                // Update row class for status color
+                const row = this.closest('tr');
+                row.className = row.className.replace(/row-\S+/g, '');
+                row.classList.add('row-' + newStatus.replace('_', '-'));
                 showNotification('Status updated', 'success');
             } else {
                 alert('Error updating status: ' + data.error);
@@ -546,6 +629,19 @@ saveNoteBtn.addEventListener('click', function() {
     .catch(error => {
         console.error('Error:', error);
         alert('Network error');
+    });
+});
+
+// Copy email functionality
+document.querySelectorAll('.copy-email').forEach(icon => {
+    icon.addEventListener('click', function(e) {
+        e.preventDefault();
+        const email = this.dataset.email;
+        navigator.clipboard.writeText(email).then(() => {
+            showNotification('Email copied!', 'success');
+        }).catch(() => {
+            alert('Could not copy email');
+        });
     });
 });
 

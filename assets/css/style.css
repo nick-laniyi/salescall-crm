@@ -715,3 +715,142 @@ body.dark-mode .status-converted {
     margin-right: 5px;
     cursor: help;
 }
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+    .navbar .container {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .navbar-menu {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+    
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .card {
+        padding: 15px;
+    }
+    
+    /* Make tables horizontally scrollable */
+    .table-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    table.table {
+        min-width: 600px; /* Forces scroll on small screens */
+    }
+    
+    /* Adjust form layouts */
+    .form-group {
+        margin-bottom: 12px;
+    }
+    
+    input, select, textarea {
+        font-size: 16px; /* Prevent zoom on mobile */
+    }
+    
+    /* Action buttons wrap */
+    #bulk-actions-form > div:first-child {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .btn, .btn-secondary, .btn-danger {
+        width: 100%;
+        text-align: center;
+        margin-bottom: 5px;
+    }
+    
+    /* Dropdown adjustments */
+    .dropdown {
+        width: 100%;
+    }
+    
+    .dropdown-toggle {
+        width: 100%;
+    }
+    
+    /* Modal for mobile */
+    .modal-content {
+        width: 90%;
+        margin: 20% auto;
+    }
+}
+
+/* Contact action icons */
+.contact-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.contact-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background-color: var(--btn-secondary-bg);
+    color: var(--text-color);
+    text-decoration: none;
+    font-size: 1.2rem;
+    transition: background-color 0.2s;
+}
+
+.contact-icon:hover {
+    background-color: var(--btn-secondary-hover);
+    text-decoration: none;
+}
+
+.contact-icon.whatsapp {
+    background-color: #25D366;
+    color: white;
+}
+
+.contact-icon.whatsapp:hover {
+    background-color: #128C7E;
+}
+
+.contact-icon.email {
+    cursor: pointer;
+}
+
+/* Status row colors */
+.row-new {
+    background-color: rgba(226, 232, 240, 0.3);
+}
+.row-contacted {
+    background-color: rgba(219, 234, 254, 0.3);
+}
+.row-interested {
+    background-color: rgba(220, 252, 231, 0.3);
+}
+.row-not_interested {
+    background-color: rgba(254, 202, 202, 0.3);
+}
+.row-converted {
+    background-color: rgba(254, 249, 195, 0.3);
+}
+
+body.dark-mode .row-new {
+    background-color: rgba(74, 85, 104, 0.3);
+}
+body.dark-mode .row-contacted {
+    background-color: rgba(30, 58, 138, 0.3);
+}
+body.dark-mode .row-interested {
+    background-color: rgba(20, 83, 45, 0.3);
+}
+body.dark-mode .row-not_interested {
+    background-color: rgba(127, 29, 29, 0.3);
+}
+body.dark-mode .row-converted {
+    background-color: rgba(133, 77, 14, 0.3);
+}

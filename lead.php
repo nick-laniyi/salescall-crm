@@ -162,11 +162,30 @@ include 'includes/header.php';
             </tr>
             <tr>
                 <th>Phone</th>
-                <td><?= htmlspecialchars($lead['phone'] ?: '—') ?></td>
+                <td>
+                    <?php if (!empty($lead['phone'])): ?>
+                        <div class="contact-actions">
+                            <a href="tel:<?= urlencode($lead['phone']) ?>" class="contact-icon" title="Call">📞</a>
+                            <a href="https://wa.me/<?= preg_replace('/[^0-9]/', '', $lead['phone']) ?>" target="_blank" class="contact-icon whatsapp" title="WhatsApp">💬</a>
+                            <?= htmlspecialchars($lead['phone']) ?>
+                        </div>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </td>
             </tr>
             <tr>
                 <th>Email</th>
-                <td><?= htmlspecialchars($lead['email'] ?: '—') ?></td>
+                <td>
+                    <?php if (!empty($lead['email'])): ?>
+                        <div class="contact-actions">
+                            <span class="contact-icon email copy-email" data-email="<?= htmlspecialchars($lead['email']) ?>" title="Copy email">📧</span>
+                            <?= htmlspecialchars($lead['email']) ?>
+                        </div>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </td>
             </tr>
             <tr>
                 <th>Status</th>
@@ -332,5 +351,69 @@ include 'includes/header.php';
     <?php endif; ?>
 
 <?php endif; ?>
+
+<!-- Add contact action styles and copy email functionality -->
+<style>
+/* Contact actions */
+.contact-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.contact-icon {
+    font-size: 1.2rem;
+    text-decoration: none;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+}
+
+.contact-icon:hover {
+    opacity: 1;
+}
+
+.contact-icon.whatsapp {
+    color: #25D366;
+}
+
+.contact-icon.email {
+    color: #333;
+}
+</style>
+
+<script>
+// Copy email functionality
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.copy-email').forEach(icon => {
+        icon.addEventListener('click', function(e) {
+            e.preventDefault();
+            const email = this.dataset.email;
+            navigator.clipboard.writeText(email).then(() => {
+                showNotification('Email copied!', 'success');
+            }).catch(() => {
+                alert('Could not copy email');
+            });
+        });
+    });
+});
+
+// Notification helper (copied from leads.php)
+function showNotification(message, type) {
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type}`;
+    notification.style.position = 'fixed';
+    notification.style.top = '20px';
+    notification.style.right = '20px';
+    notification.style.zIndex = '9999';
+    notification.style.minWidth = '200px';
+    notification.innerText = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.remove();
+    }, 3000);
+}
+</script>
 
 <?php include 'includes/footer.php'; ?>
