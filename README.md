@@ -1,25 +1,72 @@
 # Sales Calls CRM
 
-A smart, lightweight CRM designed specifically for sales teams managing cold calls. Built with PHP and MySQL, it offers intuitive lead management, call tracking, and intelligent import features.
+A smart, lightweight CRM designed specifically for sales teams managing cold calls. Built with PHP and MySQL, it offers intuitive lead management, call tracking, and intelligent import features. Organize leads into projects, define custom fields per project, and collaborate with team members.
 
 ## Features
 
-- **User authentication** – Secure signup/login with password hashing.
-- **Lead management** – Add, edit, view, and delete leads. Search and filter by status or keyword.
-- **Call logging** – Log calls with outcomes, duration, and follow-up dates.
-- **Smart import** – Upload CSV files with auto-detection of phone and email columns. Duplicate prevention and error reporting.
+- **User authentication** – Secure signup/login with password hashing. Role-based access (Admin/User).
+- **Projects (Folders)** – Organize leads into projects like "GYM CRM leads" or "NaijaBased Onboarding". Each project has its own set of custom columns.
+- **Custom Columns per Project** – Define your own fields (text, number, date, dropdown) just like an Excel sheet. Add, edit, or delete columns anytime.
+- **Lead management** – Add, edit, view, and delete leads. Search and filter by status, project, or custom fields.
+- **Call logging** – Log calls with outcomes, duration (with stopwatch), and follow-up dates. Auto-calculate duration.
+- **Smart import** – Upload CSV files, choose an existing project or create a new one on the fly with columns derived from CSV headers. Map columns and types during import.
 - **Inline editing** – Double-click any field in the leads table to edit quickly. Status changes update instantly via AJAX.
 - **Quick actions** – Dropdown menu for each lead: view details, edit, log a call, add a quick note, or delete.
-- **Bulk operations** – Select multiple leads to delete in bulk, or delete all leads with confirmation.
-- **Follow-up reminders** – Daily email reminders for pending follow-ups (requires cron job).
-- **Dashboard** – Overview of total leads, new leads, interested prospects, and calls made today.
+- **Contact icons** – Click-to-call, WhatsApp, and copy email with one click.
+- **Bulk operations** – Select multiple leads to delete in bulk, or delete all leads with confirmation (admin only).
+- **Admin user management** – Admins can create, edit, or delete users and assign roles.
+- **Team dashboard** – Admins see performance metrics per user: total leads, new, interested, converted, conversion rate, calls, follow-ups.
+- **Notifications** – In-app notifications for follow-up reminders (with bell icon). Daily email reminders via cron.
+- **Dashboard** – Overview of total leads, new leads, interested prospects, calls made today, and follow-ups due.
+- **Analytics** – Visual charts for lead status distribution, calls per day, and call outcomes. Filter by user (admin).
+- **Export to CSV** – Export all accessible leads with additional call info.
+- **Dark mode** – Respects system preference and allows manual toggle.
+- **Mobile responsive** – Works on all devices with horizontal scroll for tables.
 
 ## Tech Stack
 
 - **Backend**: PHP (vanilla, no framework), MySQL
 - **Frontend**: HTML, CSS, JavaScript (vanilla, no jQuery)
-- **AJAX**: For inline updates and quick actions
+- **AJAX**: For inline updates, quick actions, and dynamic forms
 - **Database**: MySQL with PDO for secure queries
+- **Charts**: Chart.js for analytics
+
+## Screenshots
+
+Here are some screenshots of the CRM in action. (Add your actual images to the `screenshots` folder.)
+
+### Dashboard
+![Dashboard](screenshots/dashboard.png)
+
+### Leads List
+![Leads List](screenshots/leads.png)
+
+### Lead Details
+![Lead Details](screenshots/lead-details.png)
+
+### Add/Edit Lead with Project Selection
+![Add Lead](screenshots/add-lead.png)
+
+### Import Leads – Step 2 (Mapping)
+![Import](screenshots/import.png)
+
+### Analytics
+![Analytics](screenshots/analytics.png)
+
+### Team Dashboard (Admin)
+![Team Dashboard](screenshots/team.png)
+
+### Project Management
+![Projects](screenshots/projects.png)
+
+### Custom Columns per Project
+![Custom Columns](screenshots/columns.png)
+
+### Notifications
+![Notifications](screenshots/notifications.png)
+
+### Dark Mode
+![Dark Mode](screenshots/dark-mode.png)
 
 ## Installation
 
@@ -31,7 +78,23 @@ A smart, lightweight CRM designed specifically for sales teams managing cold cal
    cd salescalls-crm
 Set up a local web server (Apache/Nginx) pointing to the project folder. Ensure mod_rewrite is enabled if you plan to use clean URLs later.
 
-Create a MySQL database and import the schema from database/schema.sql (if you have it; otherwise use the SQL provided in the README).
+Create a MySQL database and run the SQL from database/schema.sql (or the combined schema provided in the README). The full schema includes:
+
+Users table (with role column)
+
+Leads table (with project_id)
+
+Calls table
+
+Lead_shares table
+
+Projects table
+
+Project_columns table
+
+Lead_column_values table
+
+Notifications table
 
 Copy includes/config.example.php to includes/config.php and fill in your database credentials.
 
@@ -42,7 +105,12 @@ apache
     ServerName salescalls.local
     DocumentRoot /path/to/salescalls-crm
 </VirtualHost>
-Access the CRM at http://salescalls.local and register a new user.
+Create a temp_uploads directory in the project root with write permissions:
+
+bash
+mkdir temp_uploads
+chmod 777 temp_uploads
+Access the CRM at http://salescalls.local and register a new user. The first user will be a regular user; to make yourself admin, manually update the role column in the users table to 'admin'.
 
 Production Deployment
 Upload all files to your web server.
@@ -53,17 +121,30 @@ Update includes/config.php with production credentials.
 
 Run the schema SQL to create tables.
 
-Set up a cron job for daily follow-up emails:
+Create a temp_uploads directory with write permissions (e.g., 755 or 777 depending on server).
+
+Set up a cron job for daily follow-up emails and notifications:
 
 text
 0 8 * * * /usr/bin/php /path/to/salescalls-crm/cron/send-reminders.php
 File Structure
 text
 salescalls-crm/
+├── admin/
+│   ├── projects.php
+│   ├── project_form.php
+│   ├── project_columns.php
+│   ├── project_column_form.php
+│   ├── project_column_save.php
+│   ├── users.php
+│   ├── user-form.php
+│   └── team.php
 ├── assets/
 │   ├── css/
 │   │   └── style.css
 │   └── js/
+│       ├── script.js
+│       └── clipboard.js
 ├── cron/
 │   └── send-reminders.php
 ├── includes/
@@ -71,10 +152,15 @@ salescalls-crm/
 │   ├── config.example.php
 │   ├── config.php (ignored by git)
 │   ├── footer.php
+│   ├── functions.php
 │   └── header.php
+├── temp_uploads/ (ignored by git)
 ├── .gitignore
 ├── dashboard.php
 ├── download_sample.php
+├── export.php
+├── get_notifications.php
+├── get_project_columns.php
 ├── import.php
 ├── index.php
 ├── lead.php
@@ -82,14 +168,17 @@ salescalls-crm/
 ├── log-call.php
 ├── login.php
 ├── logout.php
+├── mark_notifications.php
+├── notifications.php
 ├── profile.php
+├── quick_create_project.php
 ├── quick-status.php
 ├── register.php
 └── README.md
 Configuration
 Database: Edit includes/config.php with your DB details.
 
-Email: For follow-up reminders, configure your server's mail() or use SMTP in cron/send-reminders.php.
+Email: For follow-up reminders, configure your server's mail() or use SMTP in cron/send-reminders.php. The script also creates in-app notifications.
 
 Contributing
 Contributions are welcome! Feel free to open issues or submit pull requests. Please follow existing code style and include tests where applicable.
@@ -98,33 +187,4 @@ License
 This project is open source and available under the MIT License.
 
 Acknowledgements
-Built as a portfolio project to demonstrate full-stack PHP development, AJAX interactions, and smart data handling. Inspired by the need for a simple, no-frills cold call CRM.
-
-text
-
----
-
-## 📄 LICENSE (MIT)
-
-```markdown
-MIT License
-
-Copyright (c) 2026 [Nicholas Olaniyi]
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Built as a portfolio project to demonstrate full-stack PHP development, AJAX interactions, and smart data handling. Designed by Nicholas Olaniyi.
