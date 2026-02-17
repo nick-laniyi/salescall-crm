@@ -57,6 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_owner'])) {
 $search = $_GET['search'] ?? '';
 $status = $_GET['status'] ?? '';
 $userId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 0;
+$projectId = isset($_GET['project_id']) ? (int)$_GET['project_id'] : 0;
 $show_imported = isset($_GET['imported']) && $_GET['imported'] == 1;
 
 // Advanced filter parameters
@@ -84,13 +85,15 @@ if (isAdmin()) {
 $leads = [];
 if (!empty($accessibleIds)) {
     $placeholders = implode(',', array_fill(0, count($accessibleIds), '?'));
-    // Add last_contacted subquery
+    // Add project name and last_contacted subquery
     $sql = "SELECT l.*, 
+                   p.name as project_name,
                    (SELECT created_at FROM calls WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) as last_contacted,
                    u.name as owner_name,
                    (l.user_id = ?) as is_owner,
                    (SELECT permission FROM lead_shares WHERE lead_id = l.id AND user_id = ?) as shared_permission
             FROM leads l
+            LEFT JOIN projects p ON l.project_id = p.id
             LEFT JOIN users u ON l.user_id = u.id
             WHERE l.id IN ($placeholders)";
     
@@ -101,6 +104,12 @@ if (!empty($accessibleIds)) {
     if ($userId > 0 && isAdmin()) {
         $sql .= " AND l.user_id = ?";
         $params[] = $userId;
+    }
+    
+    // Add project filter
+    if ($projectId > 0) {
+        $sql .= " AND l.project_id = ?";
+        $params[] = $projectId;
     }
     
     // Add search condition
@@ -178,6 +187,12 @@ if (isAdmin()) {
     $users = $pdo->query("SELECT id, name, email FROM users ORDER BY name")->fetchAll();
 }
 
+// Get all projects for filter (current user's projects)
+$projects = [];
+$stmt = $pdo->prepare("SELECT id, name FROM projects WHERE user_id = ? ORDER BY name");
+$stmt->execute([$_SESSION['user_id']]);
+$projects = $stmt->fetchAll();
+
 include 'includes/header.php';
 ?>
 
@@ -213,6 +228,9 @@ include 'includes/header.php';
             <input type="hidden" name="status" value="<?= htmlspecialchars($status) ?>">
             <?php if ($userId): ?>
                 <input type="hidden" name="user_id" value="<?= $userId ?>">
+            <?php endif; ?>
+            <?php if ($projectId): ?>
+                <input type="hidden" name="project_id" value="<?= $projectId ?>">
             <?php endif; ?>
             
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
@@ -286,6 +304,14 @@ include 'includes/header.php';
                 <option value="not_interested" <?= $status === 'not_interested' ? 'selected' : '' ?>>Not Interested</option>
                 <option value="converted" <?= $status === 'converted' ? 'selected' : '' ?>>Converted</option>
             </select>
+            <?php if (!empty($projects)): ?>
+                <select name="project_id" style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                    <option value="0">All Projects</option>
+                    <?php foreach ($projects as $p): ?>
+                        <option value="<?= $p['id'] ?>" <?= $projectId == $p['id'] ? 'selected' : '' ?>><?= htmlspecialchars($p['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            <?php endif; ?>
             <?php if (isAdmin() && !empty($users)): ?>
                 <select name="user_id" style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
                     <option value="0">All Users</option>
@@ -295,7 +321,7 @@ include 'includes/header.php';
                 </select>
             <?php endif; ?>
             <button type="submit" class="btn">Filter</button>
-            <?php if ($search || $status || $userId || $date_from || $date_to || $last_contacted || !empty(array_filter($_GET, fn($key) => str_starts_with($key, 'custom_'), ARRAY_FILTER_USE_KEY))): ?>
+            <?php if ($search || $status || $userId || $projectId || $date_from || $date_to || $last_contacted || !empty(array_filter($_GET, fn($key) => str_starts_with($key, 'custom_'), ARRAY_FILTER_USE_KEY))): ?>
                 <a href="leads.php" class="btn-secondary">Clear</a>
             <?php endif; ?>
         </form>
@@ -329,6 +355,8 @@ include 'includes/header.php';
                             <th>Phone</th>
                             <th>Email</th>
                             <th>Status</th>
+                            <th>Project</th>
+                            <th>Last Contacted</th>
                             <?php if (isAdmin()): ?>
                                 <th>Owner</th>
                             <?php endif; ?>
@@ -379,6 +407,14 @@ include 'includes/header.php';
                                     <option value="converted" <?= $lead['status'] === 'converted' ? 'selected' : '' ?>>Converted</option>
                                 </select>
                             </td>
+                            <td><?= htmlspecialchars($lead['project_name'] ?: '—') ?></td>
+                            <td>
+                                <?php if ($lead['last_contacted']): ?>
+                                    <?= date('M d, Y', strtotime($lead['last_contacted'])) ?>
+                                <?php else: ?>
+                                    Never
+                                <?php endif; ?>
+                            </td>
                             <?php if (isAdmin()): ?>
                                 <td>
                                     <select class="owner-select" data-lead-id="<?= $lead['id'] ?>">
@@ -411,7 +447,7 @@ include 'includes/header.php';
         </form>
     <?php else: ?>
         <p>No leads found. 
-            <?php if ($search || $status || $userId || $date_from || $date_to || $last_contacted || !empty(array_filter($_GET, fn($key) => str_starts_with($key, 'custom_'), ARRAY_FILTER_USE_KEY))): ?>
+            <?php if ($search || $status || $userId || $projectId || $date_from || $date_to || $last_contacted || !empty(array_filter($_GET, fn($key) => str_starts_with($key, 'custom_'), ARRAY_FILTER_USE_KEY))): ?>
                 <a href="leads.php">Clear filters</a> or 
             <?php endif; ?>
             <a href="lead.php?action=add">add your first lead</a>.
@@ -584,7 +620,7 @@ include 'includes/header.php';
 }
 
 .table {
-    min-width: 1000px; /* Ensures horizontal scroll on smaller screens */
+    min-width: 1200px; /* Increased width to accommodate new columns */
 }
 </style>
 

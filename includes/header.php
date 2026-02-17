@@ -23,8 +23,9 @@ $isAdmin = isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin';
                 <a href="/leads.php">Leads</a>
                 <a href="analytics.php">Analytics</a>
                 <?php if ($isAdmin): ?>
-                    <a href="admin/users.php">User Management</a>
-                    <a href="admin/team.php">Team Dashboard</a>
+                    <a href="/admin/users.php">User Management</a>
+                    <a href="admin/custom_fields.php">Custom Fields</a>
+                    <a href="/admin/team.php">Team Dashboard</a>
                 <?php endif; ?>
                 <a href="/profile.php">Profile</a>
                 <a href="/logout.php">Logout</a>

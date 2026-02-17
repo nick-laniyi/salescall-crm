@@ -16,24 +16,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = trim($_POST['email'] ?? '');
     $status = $_POST['status'] ?? 'new';
     $notes = trim($_POST['notes'] ?? '');
+    $project_id = isset($_POST['project_id']) ? (int)$_POST['project_id'] : 0;
 
     if (empty($name)) {
         $error = 'Lead name is required.';
     } else {
         if ($action === 'add') {
-            $stmt = $pdo->prepare("INSERT INTO leads (user_id, name, company, phone, email, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?)");
-            if ($stmt->execute([$_SESSION['user_id'], $name, $company, $phone, $email, $status, $notes])) {
+            $stmt = $pdo->prepare("INSERT INTO leads (user_id, name, company, phone, email, status, notes, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+            if ($stmt->execute([$_SESSION['user_id'], $name, $company, $phone, $email, $status, $notes, $project_id])) {
                 $newId = $pdo->lastInsertId();
 
-                // Handle custom fields if admin
-                if (isAdmin() && !empty($_POST['custom'])) {
-                    foreach ($_POST['custom'] as $fieldId => $value) {
+                // Handle custom fields (project columns)
+                if (!empty($_POST['custom'])) {
+                    foreach ($_POST['custom'] as $colId => $value) {
                         if (trim($value) !== '') {
-                            $stmt = $pdo->prepare("INSERT INTO lead_custom_values (lead_id, field_id, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)");
-                            $stmt->execute([$newId, $fieldId, $value]);
+                            $stmt = $pdo->prepare("INSERT INTO lead_column_values (lead_id, column_id, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)");
+                            $stmt->execute([$newId, $colId, $value]);
                         } else {
-                            $stmt = $pdo->prepare("DELETE FROM lead_custom_values WHERE lead_id = ? AND field_id = ?");
-                            $stmt->execute([$newId, $fieldId]);
+                            $stmt = $pdo->prepare("DELETE FROM lead_column_values WHERE lead_id = ? AND column_id = ?");
+                            $stmt->execute([$newId, $colId]);
                         }
                     }
                 }
@@ -48,18 +49,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!canEditLead($pdo, $id, $_SESSION['user_id'])) {
                 die('You do not have permission to edit this lead.');
             }
-            $stmt = $pdo->prepare("UPDATE leads SET name=?, company=?, phone=?, email=?, status=?, notes=? WHERE id=?");
-            if ($stmt->execute([$name, $company, $phone, $email, $status, $notes, $id])) {
+            $stmt = $pdo->prepare("UPDATE leads SET name=?, company=?, phone=?, email=?, status=?, notes=?, project_id=? WHERE id=?");
+            if ($stmt->execute([$name, $company, $phone, $email, $status, $notes, $project_id, $id])) {
 
-                // Handle custom fields if admin
-                if (isAdmin() && !empty($_POST['custom'])) {
-                    foreach ($_POST['custom'] as $fieldId => $value) {
+                // Handle custom fields
+                if (!empty($_POST['custom'])) {
+                    foreach ($_POST['custom'] as $colId => $value) {
                         if (trim($value) !== '') {
-                            $stmt = $pdo->prepare("INSERT INTO lead_custom_values (lead_id, field_id, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)");
-                            $stmt->execute([$id, $fieldId, $value]);
+                            $stmt = $pdo->prepare("INSERT INTO lead_column_values (lead_id, column_id, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)");
+                            $stmt->execute([$id, $colId, $value]);
                         } else {
-                            $stmt = $pdo->prepare("DELETE FROM lead_custom_values WHERE lead_id = ? AND field_id = ?");
-                            $stmt->execute([$id, $fieldId]);
+                            $stmt = $pdo->prepare("DELETE FROM lead_column_values WHERE lead_id = ? AND column_id = ?");
+                            $stmt->execute([$id, $colId]);
                         }
                     }
                 }
@@ -98,25 +99,41 @@ if ($action === 'add') {
         'phone' => '',
         'email' => '',
         'status' => 'new',
-        'notes' => ''
+        'notes' => '',
+        'project_id' => 0
     ];
 }
 
-// Load custom fields (only for admin users)
-$customFields = [];
-$customValues = [];
-if (isAdmin()) {
-    $stmt = $pdo->prepare("SELECT * FROM custom_fields WHERE user_id = ? ORDER BY sort_order");
-    $stmt->execute([$_SESSION['user_id']]);
-    $customFields = $stmt->fetchAll();
+// Get all projects (for dropdown)
+$projects = [];
+$stmt = $pdo->prepare("SELECT id, name FROM projects WHERE user_id = ? ORDER BY name");
+$stmt->execute([$_SESSION['user_id']]);
+$projects = $stmt->fetchAll();
 
-    // If editing/viewing, get existing custom values
-    if ($id > 0) {
-        $stmt = $pdo->prepare("SELECT field_id, value FROM lead_custom_values WHERE lead_id = ?");
-        $stmt->execute([$id]);
-        foreach ($stmt->fetchAll() as $row) {
-            $customValues[$row['field_id']] = $row['value'];
-        }
+// For existing lead, get its project
+$currentProjectId = $lead ? (int)$lead['project_id'] : 0;
+
+// If project selected via GET (for dynamic loading in add mode) or from lead
+$selectedProjectId = $currentProjectId;
+if (isset($_GET['project_id'])) {
+    $selectedProjectId = (int)$_GET['project_id'];
+}
+
+// Load project columns for the selected project
+$projectColumns = [];
+if ($selectedProjectId > 0) {
+    $stmt = $pdo->prepare("SELECT * FROM project_columns WHERE project_id = ? ORDER BY sort_order, id");
+    $stmt->execute([$selectedProjectId]);
+    $projectColumns = $stmt->fetchAll();
+}
+
+// Load existing custom values for the lead (if editing/viewing)
+$customValues = [];
+if ($id > 0 && $selectedProjectId > 0) {
+    $stmt = $pdo->prepare("SELECT column_id, value FROM lead_column_values WHERE lead_id = ?");
+    $stmt->execute([$id]);
+    foreach ($stmt->fetchAll() as $row) {
+        $customValues[$row['column_id']] = $row['value'];
     }
 }
 
@@ -171,34 +188,84 @@ include 'includes/header.php';
                 <textarea id="notes" name="notes" rows="4"><?= htmlspecialchars($lead['notes']) ?></textarea>
             </div>
 
-            <?php if (!empty($customFields)): ?>
-                <h3>Custom Fields</h3>
-                <?php foreach ($customFields as $field): ?>
-                    <div class="form-group">
-                        <label for="custom_<?= $field['id'] ?>"><?= htmlspecialchars($field['name']) ?></label>
-                        <?php if ($field['field_type'] === 'text'): ?>
-                            <input type="text" id="custom_<?= $field['id'] ?>" name="custom[<?= $field['id'] ?>]" value="<?= isset($customValues[$field['id']]) ? htmlspecialchars($customValues[$field['id']]) : '' ?>">
-                        <?php elseif ($field['field_type'] === 'number'): ?>
-                            <input type="number" id="custom_<?= $field['id'] ?>" name="custom[<?= $field['id'] ?>]" value="<?= isset($customValues[$field['id']]) ? htmlspecialchars($customValues[$field['id']]) : '' ?>">
-                        <?php elseif ($field['field_type'] === 'date'): ?>
-                            <input type="date" id="custom_<?= $field['id'] ?>" name="custom[<?= $field['id'] ?>]" value="<?= isset($customValues[$field['id']]) ? htmlspecialchars($customValues[$field['id']]) : '' ?>">
-                        <?php elseif ($field['field_type'] === 'select' && $field['options']): ?>
-                            <?php $options = json_decode($field['options'], true); ?>
-                            <select id="custom_<?= $field['id'] ?>" name="custom[<?= $field['id'] ?>]">
-                                <option value="">-- Select --</option>
-                                <?php foreach ($options as $opt): ?>
-                                    <option value="<?= htmlspecialchars($opt) ?>" <?= (isset($customValues[$field['id']]) && $customValues[$field['id']] === $opt) ? 'selected' : '' ?>><?= htmlspecialchars($opt) ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        <?php endif; ?>
-                    </div>
-                <?php endforeach; ?>
-            <?php endif; ?>
+            <!-- Project selection -->
+            <div class="form-group">
+                <label for="project_id">Project (Folder)</label>
+                <select id="project_id" name="project_id" onchange="loadProjectColumns(this.value)">
+                    <option value="">-- Select Project --</option>
+                    <?php foreach ($projects as $p): ?>
+                        <option value="<?= $p['id'] ?>" <?= $selectedProjectId == $p['id'] ? 'selected' : '' ?>><?= htmlspecialchars($p['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <!-- Dynamic custom fields container -->
+            <div id="custom-fields-container">
+                <?php if (!empty($projectColumns)): ?>
+                    <h3>Custom Fields</h3>
+                    <?php foreach ($projectColumns as $col): ?>
+                        <div class="form-group">
+                            <label for="col_<?= $col['id'] ?>"><?= htmlspecialchars($col['name']) ?></label>
+                            <?php if ($col['column_type'] === 'text'): ?>
+                                <input type="text" id="col_<?= $col['id'] ?>" name="custom[<?= $col['id'] ?>]" value="<?= isset($customValues[$col['id']]) ? htmlspecialchars($customValues[$col['id']]) : '' ?>">
+                            <?php elseif ($col['column_type'] === 'number'): ?>
+                                <input type="number" id="col_<?= $col['id'] ?>" name="custom[<?= $col['id'] ?>]" value="<?= isset($customValues[$col['id']]) ? htmlspecialchars($customValues[$col['id']]) : '' ?>">
+                            <?php elseif ($col['column_type'] === 'date'): ?>
+                                <input type="date" id="col_<?= $col['id'] ?>" name="custom[<?= $col['id'] ?>]" value="<?= isset($customValues[$col['id']]) ? htmlspecialchars($customValues[$col['id']]) : '' ?>">
+                            <?php elseif ($col['column_type'] === 'select' && $col['options']): ?>
+                                <?php $options = json_decode($col['options'], true); ?>
+                                <select id="col_<?= $col['id'] ?>" name="custom[<?= $col['id'] ?>]">
+                                    <option value="">-- Select --</option>
+                                    <?php foreach ($options as $opt): ?>
+                                        <option value="<?= htmlspecialchars($opt) ?>" <?= (isset($customValues[$col['id']]) && $customValues[$col['id']] === $opt) ? 'selected' : '' ?>><?= htmlspecialchars($opt) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
 
             <button type="submit" class="btn"><?= $action === 'add' ? 'Add Lead' : 'Update Lead' ?></button>
             <a href="leads.php" class="btn-secondary">Cancel</a>
         </form>
     </div>
+
+    <script>
+    function loadProjectColumns(projectId) {
+        if (!projectId) {
+            document.getElementById('custom-fields-container').innerHTML = '';
+            return;
+        }
+        fetch('get_project_columns.php?project_id=' + projectId)
+            .then(response => response.json())
+            .then(columns => {
+                let html = '<h3>Custom Fields</h3>';
+                columns.forEach(col => {
+                    html += '<div class="form-group">';
+                    html += '<label for="col_' + col.id + '">' + col.name + '</label>';
+                    if (col.column_type === 'text') {
+                        html += '<input type="text" id="col_' + col.id + '" name="custom[' + col.id + ']">';
+                    } else if (col.column_type === 'number') {
+                        html += '<input type="number" id="col_' + col.id + '" name="custom[' + col.id + ']">';
+                    } else if (col.column_type === 'date') {
+                        html += '<input type="date" id="col_' + col.id + '" name="custom[' + col.id + ']">';
+                    } else if (col.column_type === 'select' && col.options) {
+                        let options = JSON.parse(col.options);
+                        html += '<select id="col_' + col.id + '" name="custom[' + col.id + ']">';
+                        html += '<option value="">-- Select --</option>';
+                        options.forEach(opt => {
+                            html += '<option value="' + opt + '">' + opt + '</option>';
+                        });
+                        html += '</select>';
+                    }
+                    html += '</div>';
+                });
+                document.getElementById('custom-fields-container').innerHTML = html;
+            })
+            .catch(error => console.error('Error loading columns:', error));
+    }
+    </script>
 
 <?php elseif ($action === 'view' && $lead): ?>
     <h1><?= htmlspecialchars($lead['name']) ?></h1>
@@ -263,6 +330,21 @@ include 'includes/header.php';
                 <td><?= htmlspecialchars($lead['status']) ?></td>
             </tr>
             <tr>
+                <th>Project</th>
+                <td>
+                    <?php
+                    if ($lead['project_id']) {
+                        $stmt = $pdo->prepare("SELECT name FROM projects WHERE id = ?");
+                        $stmt->execute([$lead['project_id']]);
+                        $projectName = $stmt->fetchColumn();
+                        echo htmlspecialchars($projectName ?: '—');
+                    } else {
+                        echo '—';
+                    }
+                    ?>
+                </td>
+            </tr>
+            <tr>
                 <th>Notes</th>
                 <td><?= nl2br(htmlspecialchars($lead['notes'] ?: '—')) ?></td>
             </tr>
@@ -277,14 +359,14 @@ include 'includes/header.php';
         </table>
     </div>
 
-    <?php if (!empty($customFields) && $action === 'view'): ?>
+    <?php if (!empty($projectColumns) && $action === 'view'): ?>
         <div class="card">
             <h2>Custom Fields</h2>
             <table class="table" style="width: auto;">
-                <?php foreach ($customFields as $field): ?>
+                <?php foreach ($projectColumns as $col): ?>
                     <tr>
-                        <th><?= htmlspecialchars($field['name']) ?></th>
-                        <td><?= isset($customValues[$field['id']]) ? htmlspecialchars($customValues[$field['id']]) : '—' ?></td>
+                        <th><?= htmlspecialchars($col['name']) ?></th>
+                        <td><?= isset($customValues[$col['id']]) ? htmlspecialchars($customValues[$col['id']]) : '—' ?></td>
                     </tr>
                 <?php endforeach; ?>
             </table>

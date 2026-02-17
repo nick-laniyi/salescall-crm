@@ -1,10 +1,17 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'includes/config.php';
+require_once 'includes/functions.php';
 
 $errors = [];
 $importedCount = 0;
 $skippedCount = 0;
+
+// Fetch projects for dropdown (admin can see all, regular users see their own)
+$projects = [];
+$stmt = $pdo->prepare("SELECT id, name FROM projects WHERE user_id = ? ORDER BY name");
+$stmt->execute([$_SESSION['user_id']]);
+$projects = $stmt->fetchAll();
 
 // Handle file upload and import
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
@@ -12,6 +19,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
     $delimiter = $_POST['delimiter'] ?? ',';
     $hasHeader = isset($_POST['has_header']);
     $autoDetect = isset($_POST['auto_detect']);
+    $project_id = (int)($_POST['project_id'] ?? 0);
+    
+    // Validate project selection
+    if ($project_id <= 0) {
+        $errors[] = 'Please select a target project.';
+    } else {
+        // Verify project belongs to user
+        $stmt = $pdo->prepare("SELECT id FROM projects WHERE id = ? AND user_id = ?");
+        $stmt->execute([$project_id, $_SESSION['user_id']]);
+        if (!$stmt->fetch()) {
+            $errors[] = 'Invalid project selected.';
+        }
+    }
     
     // Validate delimiter
     if (!in_array($delimiter, [',', ';', '\t', '|'])) {
@@ -138,19 +158,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                                 $status = $lowerStatus;
                             } else {
                                 // Try to map common variations
-                                $mapping = [
-                                    'not interested' => 'not_interested',
-                                    'no interest' => 'not_interested',
-                                    'call back' => 'callback', // but callback is for calls, not leads? Actually callback is a call outcome, not lead status. For lead status, we have 'contacted' or 'interested'. We'll keep mapping simple.
-                                ];
-                                if (isset($mapping[$lowerStatus])) {
-                                    $status = $mapping[$lowerStatus];
-                                } elseif (strpos($lowerStatus, 'interest') !== false) {
+                                if (strpos($lowerStatus, 'interest') !== false) {
                                     $status = 'interested';
                                 } elseif (strpos($lowerStatus, 'contact') !== false) {
                                     $status = 'contacted';
                                 } elseif (strpos($lowerStatus, 'convert') !== false) {
                                     $status = 'converted';
+                                } elseif (strpos($lowerStatus, 'not') !== false) {
+                                    $status = 'not_interested';
                                 } else {
                                     // If still unknown, default to new and log warning
                                     $errors[] = "Line $lineNumber: Unknown status '$statusRaw'. Using 'new'.";
@@ -170,10 +185,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                             }
                         }
                         
-                        // Insert into database
-                        $stmt = $pdo->prepare("INSERT INTO leads (user_id, name, company, phone, email, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                        // Insert into database with project_id
+                        $stmt = $pdo->prepare("INSERT INTO leads (user_id, project_id, name, company, phone, email, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
                         try {
-                            if ($stmt->execute([$_SESSION['user_id'], $name, $company, $phone, $email, $status, $notes])) {
+                            if ($stmt->execute([$_SESSION['user_id'], $project_id, $name, $company, $phone, $email, $status, $notes])) {
                                 $importedCount++;
                                 $importedIds[] = $pdo->lastInsertId();
                             } else {
@@ -226,6 +241,16 @@ include 'includes/header.php';
     <p>Upload a CSV or text file with your leads. You can map columns to our fields or enable auto-detection for phone/email.</p>
     
     <form method="post" enctype="multipart/form-data">
+        <div class="form-group">
+            <label for="project_id">Target Project *</label>
+            <select id="project_id" name="project_id" required>
+                <option value="">-- Select Project --</option>
+                <?php foreach ($projects as $p): ?>
+                    <option value="<?= $p['id'] ?>"><?= htmlspecialchars($p['name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        
         <div class="form-group">
             <label for="lead_file">Select file</label>
             <input type="file" id="lead_file" name="lead_file" accept=".csv,.txt,text/csv" required>
