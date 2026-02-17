@@ -188,15 +188,18 @@ include 'includes/header.php';
                 <textarea id="notes" name="notes" rows="4"><?= htmlspecialchars($lead['notes']) ?></textarea>
             </div>
 
-            <!-- Project selection -->
-            <div class="form-group">
-                <label for="project_id">Project (Folder)</label>
-                <select id="project_id" name="project_id" onchange="loadProjectColumns(this.value)">
-                    <option value="">-- Select Project --</option>
-                    <?php foreach ($projects as $p): ?>
-                        <option value="<?= $p['id'] ?>" <?= $selectedProjectId == $p['id'] ? 'selected' : '' ?>><?= htmlspecialchars($p['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
+            <!-- Project selection with "New Project" button -->
+            <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+                <div style="flex: 1;">
+                    <label for="project_id">Project (Folder)</label>
+                    <select id="project_id" name="project_id" onchange="loadProjectColumns(this.value)" style="width: 100%;">
+                        <option value="">-- Select Project --</option>
+                        <?php foreach ($projects as $p): ?>
+                            <option value="<?= $p['id'] ?>" <?= $selectedProjectId == $p['id'] ? 'selected' : '' ?>><?= htmlspecialchars($p['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <button type="button" class="btn-secondary btn-small" style="margin-top: 22px;" onclick="openNewProjectModal()">+ New Project</button>
             </div>
 
             <!-- Dynamic custom fields container -->
@@ -231,7 +234,37 @@ include 'includes/header.php';
         </form>
     </div>
 
+    <!-- New Project Modal -->
+    <div id="newProjectModal" class="modal">
+        <div class="modal-content" style="width: 600px; max-width: 90%;">
+            <span class="close">&times;</span>
+            <h3>Create New Project</h3>
+            <form id="newProjectForm">
+                <div class="form-group">
+                    <label for="project_name">Project Name *</label>
+                    <input type="text" id="project_name" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label for="project_description">Description</label>
+                    <textarea id="project_description" name="description" rows="2"></textarea>
+                </div>
+                
+                <h4>Columns</h4>
+                <div id="columns-container">
+                    <!-- Column rows will be added here -->
+                </div>
+                <button type="button" id="addColumnBtn" class="btn-secondary btn-small">+ Add Column</button>
+                
+                <div style="margin-top: 20px;">
+                    <button type="submit" class="btn">Create Project</button>
+                    <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
+    // Function to load project columns dynamically (existing)
     function loadProjectColumns(projectId) {
         if (!projectId) {
             document.getElementById('custom-fields-container').innerHTML = '';
@@ -265,6 +298,97 @@ include 'includes/header.php';
             })
             .catch(error => console.error('Error loading columns:', error));
     }
+
+    // Modal functions
+    function openNewProjectModal() {
+        document.getElementById('newProjectModal').style.display = 'block';
+        // Add one empty column row by default
+        addColumnRow();
+    }
+
+    function closeModal() {
+        document.getElementById('newProjectModal').style.display = 'none';
+        document.getElementById('columns-container').innerHTML = '';
+    }
+
+    // Add a column row
+    function addColumnRow() {
+        const container = document.getElementById('columns-container');
+        const row = document.createElement('div');
+        row.className = 'column-row';
+        row.style.display = 'flex';
+        row.style.gap = '10px';
+        row.style.marginBottom = '10px';
+        row.style.alignItems = 'center';
+        row.innerHTML = `
+            <input type="text" name="col_name[]" placeholder="Column name" style="flex: 2;" required>
+            <select name="col_type[]" style="flex: 1;">
+                <option value="text">Text</option>
+                <option value="number">Number</option>
+                <option value="date">Date</option>
+                <option value="select">Dropdown</option>
+            </select>
+            <textarea name="col_options[]" placeholder="Options (one per line, for dropdown)" style="flex: 2; display: none;"></textarea>
+            <button type="button" class="btn-danger btn-small" onclick="this.parentElement.remove()">✕</button>
+        `;
+        container.appendChild(row);
+        
+        // Show/hide options based on type
+        const typeSelect = row.querySelector('select');
+        const optionsTextarea = row.querySelector('textarea');
+        typeSelect.addEventListener('change', function() {
+            optionsTextarea.style.display = this.value === 'select' ? 'block' : 'none';
+            if (this.value !== 'select') optionsTextarea.removeAttribute('required');
+            else optionsTextarea.setAttribute('required', 'required');
+        });
+    }
+
+    // Add click handler for "+ Add Column" button
+    document.getElementById('addColumnBtn').addEventListener('click', addColumnRow);
+
+    // Handle form submission
+    document.getElementById('newProjectForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const formData = new FormData(this);
+        fetch('quick_create_project.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Add new option to project dropdown
+                const select = document.getElementById('project_id');
+                const option = document.createElement('option');
+                option.value = data.project_id;
+                option.text = data.project_name;
+                select.appendChild(option);
+                select.value = data.project_id;
+                
+                // Trigger change to load columns
+                loadProjectColumns(data.project_id);
+                
+                closeModal();
+            } else {
+                alert('Error: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Network error');
+            console.error(error);
+        });
+    });
+
+    // Close modal when clicking on X or outside
+    window.onclick = function(event) {
+        const modal = document.getElementById('newProjectModal');
+        if (event.target == modal) {
+            closeModal();
+        }
+    }
+
+    document.querySelector('#newProjectModal .close').addEventListener('click', closeModal);
     </script>
 
 <?php elseif ($action === 'view' && $lead): ?>
@@ -550,7 +674,7 @@ include 'includes/header.php';
 </style>
 
 <script>
-// Copy email functionality
+// Copy email functionality (for view mode)
 document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.copy-email').forEach(icon => {
         icon.addEventListener('click', function(e) {
@@ -565,7 +689,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// Notification helper (copied from leads.php)
+// Notification helper
 function showNotification(message, type) {
     const notification = document.createElement('div');
     notification.className = `alert alert-${type}`;

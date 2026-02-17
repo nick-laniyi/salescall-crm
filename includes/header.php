@@ -21,7 +21,7 @@ $isAdmin = isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin';
             <div class="navbar-menu">
                 <a href="/dashboard.php">Dashboard</a>
                 <a href="/leads.php">Leads</a>
-                <a href="analytics.php">Analytics</a>
+                <a href="/analytics.php">Analytics</a>
                 <?php if ($isAdmin): ?>
                     <a href="/admin/users.php">User Management</a>
                     <a href="admin/custom_fields.php">Custom Fields</a>
