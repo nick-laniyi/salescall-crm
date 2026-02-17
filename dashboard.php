@@ -1,30 +1,37 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'includes/config.php';
+require_once 'includes/functions.php';
 
-// Get stats
-$stats = [];
+// Get accessible lead IDs (admin sees all, others see own/shared)
+$accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id'], isAdmin());
+$accessibleCount = count($accessibleIds);
+
 // Total leads
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE user_id = ?");
-$stmt->execute([$_SESSION['user_id']]);
-$stats['total_leads'] = $stmt->fetchColumn();
+$stats['total_leads'] = $accessibleCount;
 
-// New leads (status = 'new')
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE user_id = ? AND status = 'new'");
-$stmt->execute([$_SESSION['user_id']]);
-$stats['new_leads'] = $stmt->fetchColumn();
+// New leads (status = 'new') among accessible leads
+if ($accessibleCount > 0) {
+    $placeholders = implode(',', array_fill(0, $accessibleCount, '?'));
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE id IN ($placeholders) AND status = 'new'");
+    $stmt->execute($accessibleIds);
+    $stats['new_leads'] = $stmt->fetchColumn();
 
-// Interested leads
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE user_id = ? AND status = 'interested'");
-$stmt->execute([$_SESSION['user_id']]);
-$stats['interested'] = $stmt->fetchColumn();
+    // Interested leads
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE id IN ($placeholders) AND status = 'interested'");
+    $stmt->execute($accessibleIds);
+    $stats['interested'] = $stmt->fetchColumn();
+} else {
+    $stats['new_leads'] = 0;
+    $stats['interested'] = 0;
+}
 
-// Calls today
+// Calls today (user's own calls)
 $stmt = $pdo->prepare("SELECT COUNT(*) FROM calls WHERE user_id = ? AND DATE(created_at) = CURDATE()");
 $stmt->execute([$_SESSION['user_id']]);
 $stats['calls_today'] = $stmt->fetchColumn();
 
-// Follow-ups due (today or past)
+// Follow-ups due (today or past) for user's own calls
 $stmt = $pdo->prepare("
     SELECT c.*, l.name as lead_name 
     FROM calls c 
@@ -61,32 +68,34 @@ include 'includes/header.php';
 
 <div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-        <h2>Recent Follow-ups</h2>
+        <h2>Follow-ups Due</h2>
         <a href="leads.php" class="btn btn-secondary">View All Leads</a>
     </div>
     <?php if (count($followUps) > 0): ?>
-        <table class="table">
-            <thead>
-                <tr>
-                    <th>Lead</th>
-                    <th>Last Outcome</th>
-                    <th>Follow-up Date</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($followUps as $call): ?>
-                <tr>
-                    <td><?= htmlspecialchars($call['lead_name']) ?></td>
-                    <td><?= htmlspecialchars($call['outcome']) ?></td>
-                    <td><?= htmlspecialchars($call['follow_up_date']) ?></td>
-                    <td><a href="lead.php?id=<?= $call['lead_id'] ?>" class="btn-secondary btn-small">View</a></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Lead</th>
+                        <th>Last Outcome</th>
+                        <th>Follow-up Date</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($followUps as $call): ?>
+                    <tr>
+                        <td><?= htmlspecialchars($call['lead_name']) ?></td>
+                        <td><?= htmlspecialchars($call['outcome']) ?></td>
+                        <td><?= htmlspecialchars($call['follow_up_date']) ?></td>
+                        <td><a href="lead.php?id=<?= $call['lead_id'] ?>" class="btn-secondary btn-small">View</a></td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
     <?php else: ?>
-        <p>No follow-ups due today.</p>
+        <p>No follow-ups due.</p>
     <?php endif; ?>
 </div>
 
