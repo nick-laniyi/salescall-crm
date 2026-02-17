@@ -3,8 +3,25 @@ require_once 'includes/auth.php';
 require_once 'includes/config.php';
 require_once 'includes/functions.php';
 
-// Get accessible lead IDs
-$accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id']);
+$userId = 0;
+if (isAdmin() && isset($_GET['user_id'])) {
+    $userId = (int)$_GET['user_id'];
+}
+
+// Get accessible lead IDs based on role and filter
+if (isAdmin()) {
+    if ($userId > 0) {
+        // Admin viewing specific user's leads
+        $accessibleIds = getAccessibleLeadIds($pdo, $userId, false);
+    } else {
+        // Admin viewing all leads
+        $accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id'], true);
+    }
+} else {
+    // Regular user
+    $accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id']);
+}
+
 $totalLeads = count($accessibleIds);
 
 $statusStats = [];
@@ -53,10 +70,31 @@ foreach ($statusStats as $stat) {
 }
 $conversionRate = $totalLeads > 0 ? round(($converted / $totalLeads) * 100, 2) : 0;
 
+// Get list of users for dropdown (admin only)
+$users = [];
+if (isAdmin()) {
+    $users = $pdo->query("SELECT id, name FROM users ORDER BY name")->fetchAll();
+}
+
 include 'includes/header.php';
 ?>
 
 <h1>Analytics</h1>
+
+<?php if (isAdmin()): ?>
+<div class="card">
+    <form method="get" style="display: flex; gap: 10px; align-items: center;">
+        <label for="user_id">View analytics for:</label>
+        <select name="user_id" id="user_id">
+            <option value="0">All Users</option>
+            <?php foreach ($users as $user): ?>
+                <option value="<?= $user['id'] ?>" <?= $userId == $user['id'] ? 'selected' : '' ?>><?= htmlspecialchars($user['name']) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <button type="submit" class="btn">Go</button>
+    </form>
+</div>
+<?php endif; ?>
 
 <div class="stats-grid">
     <div class="stat-card">

@@ -3,11 +3,9 @@ require_once 'includes/auth.php';
 require_once 'includes/config.php';
 
 $errors = [];
-$success = [];
 $importedCount = 0;
 $skippedCount = 0;
 
-// Handle sample download (separate file)
 // Handle file upload and import
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
     $file = $_FILES['lead_file'];
@@ -34,7 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
     if ($file['error'] !== UPLOAD_ERR_OK) {
         $errors[] = 'File upload failed.';
     } else {
-        // Check file size (optional: limit to 2MB)
+        // Check file size (limit to 2MB)
         if ($file['size'] > 2 * 1024 * 1024) {
             $errors[] = 'File size exceeds 2MB limit.';
         } else {
@@ -120,7 +118,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                         $company = trim($data[$map['company']] ?? '');
                         $phone = trim($data[$map['phone']] ?? '');
                         $email = trim($data[$map['email']] ?? '');
-                        $status = trim($data[$map['status']] ?? 'new');
+                        $statusRaw = trim($data[$map['status']] ?? '');
                         $notes = trim($data[$map['notes']] ?? '');
                         
                         // Validate name
@@ -130,11 +128,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                             continue;
                         }
                         
-                        // Validate status
+                        // Map status to valid ENUM values
                         $validStatuses = ['new', 'contacted', 'interested', 'not_interested', 'converted'];
-                        if (!empty($status) && !in_array($status, $validStatuses)) {
-                            $errors[] = "Line $lineNumber: Invalid status '$status'. Using 'new'.";
-                            $status = 'new';
+                        $status = 'new'; // default
+                        if (!empty($statusRaw)) {
+                            $lowerStatus = strtolower($statusRaw);
+                            // Check exact match first
+                            if (in_array($lowerStatus, $validStatuses)) {
+                                $status = $lowerStatus;
+                            } else {
+                                // Try to map common variations
+                                $mapping = [
+                                    'not interested' => 'not_interested',
+                                    'no interest' => 'not_interested',
+                                    'call back' => 'callback', // but callback is for calls, not leads? Actually callback is a call outcome, not lead status. For lead status, we have 'contacted' or 'interested'. We'll keep mapping simple.
+                                ];
+                                if (isset($mapping[$lowerStatus])) {
+                                    $status = $mapping[$lowerStatus];
+                                } elseif (strpos($lowerStatus, 'interest') !== false) {
+                                    $status = 'interested';
+                                } elseif (strpos($lowerStatus, 'contact') !== false) {
+                                    $status = 'contacted';
+                                } elseif (strpos($lowerStatus, 'convert') !== false) {
+                                    $status = 'converted';
+                                } else {
+                                    // If still unknown, default to new and log warning
+                                    $errors[] = "Line $lineNumber: Unknown status '$statusRaw'. Using 'new'.";
+                                    $status = 'new';
+                                }
+                            }
                         }
                         
                         // Check for duplicate by email (if email provided)
@@ -150,11 +172,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                         
                         // Insert into database
                         $stmt = $pdo->prepare("INSERT INTO leads (user_id, name, company, phone, email, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?)");
-                        if ($stmt->execute([$_SESSION['user_id'], $name, $company, $phone, $email, $status, $notes])) {
-                            $importedCount++;
-                            $importedIds[] = $pdo->lastInsertId();
-                        } else {
-                            $errors[] = "Line $lineNumber: Database error – failed to insert.";
+                        try {
+                            if ($stmt->execute([$_SESSION['user_id'], $name, $company, $phone, $email, $status, $notes])) {
+                                $importedCount++;
+                                $importedIds[] = $pdo->lastInsertId();
+                            } else {
+                                $errors[] = "Line $lineNumber: Database error – failed to insert.";
+                                $skippedCount++;
+                            }
+                        } catch (PDOException $e) {
+                            // Handle specific errors like data truncation
+                            $errors[] = "Line $lineNumber: Database error - " . $e->getMessage();
                             $skippedCount++;
                         }
                     }
@@ -184,9 +212,12 @@ include 'includes/header.php';
 
 <?php if (!empty($errors)): ?>
     <div class="alert alert-error">
-        <?php foreach ($errors as $error): ?>
-            <div><?= htmlspecialchars($error) ?></div>
-        <?php endforeach; ?>
+        <h3>Errors encountered:</h3>
+        <ul>
+            <?php foreach ($errors as $error): ?>
+                <li><?= htmlspecialchars($error) ?></li>
+            <?php endforeach; ?>
+        </ul>
     </div>
 <?php endif; ?>
 

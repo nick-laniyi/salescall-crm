@@ -19,14 +19,14 @@ $isAdmin = isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin';
         <div class="container">
             <a href="dashboard.php" class="navbar-brand">Sales Calls CRM</a>
             <div class="navbar-menu">
-                <a href="dashboard.php">Dashboard</a>
-                <a href="leads.php">Leads</a>
-                <a href="analytics.php">Analytics</a>
+                <a href="/dashboard.php">Dashboard</a>
+                <a href="/leads.php">Leads</a>
+                <a href="/analytics.php">Analytics</a>
                 <?php if ($isAdmin): ?>
                     <a href="admin/users.php">User Management</a>
                 <?php endif; ?>
-                <a href="profile.php">Profile</a>
-                <a href="logout.php">Logout</a>
+                <a href="/profile.php">Profile</a>
+                <a href="/logout.php">Logout</a>
                 <button id="darkModeToggle" class="dark-mode-toggle" title="Toggle dark mode">🌓</button>
             </div>
         </div>

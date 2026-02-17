@@ -3,11 +3,20 @@ require_once 'includes/auth.php';
 require_once 'includes/config.php';
 require_once 'includes/functions.php';
 
-// Get accessible lead IDs
-$accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id']);
+// Determine which leads to export
+if (isAdmin() && isset($_GET['user_id'])) {
+    // Admin exporting leads for a specific user
+    $userId = (int)$_GET['user_id'];
+    $accessibleIds = getAccessibleLeadIds($pdo, $userId, false); // that user's accessible leads
+} elseif (isAdmin()) {
+    // Admin exporting all leads
+    $accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id'], true); // all leads
+} else {
+    // Regular user exports own/shared
+    $accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id']);
+}
 
 if (empty($accessibleIds)) {
-    // No leads to export
     header('Content-Type: text/plain');
     echo "No leads to export.";
     exit;
@@ -16,11 +25,12 @@ if (empty($accessibleIds)) {
 $placeholders = implode(',', array_fill(0, count($accessibleIds), '?'));
 
 // Fetch leads with additional info
-$sql = "SELECT l.*, 
+$sql = "SELECT l.*, u.name as owner_name,
                (SELECT outcome FROM calls WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) as last_call_outcome,
                (SELECT created_at FROM calls WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) as last_call_date,
                (SELECT COUNT(*) FROM calls WHERE lead_id = l.id) as total_calls
         FROM leads l
+        LEFT JOIN users u ON l.user_id = u.id
         WHERE l.id IN ($placeholders)
         ORDER BY l.created_at DESC";
 $stmt = $pdo->prepare($sql);
@@ -37,8 +47,9 @@ $output = fopen('php://output', 'w');
 fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
 
 // Headers
-fputcsv($output, [
+$headers = [
     'ID',
+    'Owner',
     'Name',
     'Company',
     'Phone',
@@ -49,11 +60,13 @@ fputcsv($output, [
     'Last Call Date',
     'Last Call Outcome',
     'Total Calls'
-]);
+];
+fputcsv($output, $headers);
 
 foreach ($leads as $lead) {
     fputcsv($output, [
         $lead['id'],
+        $lead['owner_name'],
         $lead['name'],
         $lead['company'],
         $lead['phone'],

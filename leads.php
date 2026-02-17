@@ -3,52 +3,90 @@ require_once 'includes/auth.php';
 require_once 'includes/config.php';
 require_once 'includes/functions.php';
 
-// Handle bulk delete
+// Handle bulk delete (admin or owner only – we'll check each lead)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_selected'])) {
     $ids = $_POST['lead_ids'] ?? [];
     if (!empty($ids) && is_array($ids)) {
-        // Only delete if user owns these leads
-        $placeholders = implode(',', array_fill(0, count($ids), '?'));
-        $stmt = $pdo->prepare("DELETE FROM leads WHERE id IN ($placeholders) AND user_id = ?");
-        $params = array_merge($ids, [$_SESSION['user_id']]);
-        if ($stmt->execute($params)) {
-            $deleted = $stmt->rowCount();
-            $success = "$deleted lead(s) deleted.";
+        $deleted = 0;
+        foreach ($ids as $leadId) {
+            if (canDeleteLead($pdo, $leadId, $_SESSION['user_id'])) {
+                $stmt = $pdo->prepare("DELETE FROM leads WHERE id = ?");
+                $stmt->execute([$leadId]);
+                $deleted++;
+            }
+        }
+        $success = "$deleted lead(s) deleted.";
+    }
+}
+
+// Handle delete all (admin only)
+if (isset($_GET['delete_all']) && $_GET['delete_all'] === 'confirm') {
+    if (!isAdmin()) {
+        $error = "Only admin can delete all leads.";
+    } else {
+        $stmt = $pdo->prepare("DELETE FROM leads");
+        if ($stmt->execute()) {
+            $success = "All leads deleted.";
         } else {
-            $error = "Failed to delete leads.";
+            $error = "Failed to delete all leads.";
         }
     }
 }
 
-// Handle delete all
-if (isset($_GET['delete_all']) && $_GET['delete_all'] === 'confirm') {
-    $stmt = $pdo->prepare("DELETE FROM leads WHERE user_id = ?");
-    if ($stmt->execute([$_SESSION['user_id']])) {
-        $success = "All leads deleted.";
+// Handle assign owner (admin only)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_owner'])) {
+    if (!isAdmin()) {
+        $error = "Only admin can assign leads.";
     } else {
-        $error = "Failed to delete all leads.";
+        $ids = $_POST['lead_ids'] ?? [];
+        $newOwner = (int)($_POST['new_owner'] ?? 0);
+        if (!empty($ids) && $newOwner) {
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $stmt = $pdo->prepare("UPDATE leads SET user_id = ? WHERE id IN ($placeholders)");
+            $params = array_merge([$newOwner], $ids);
+            if ($stmt->execute($params)) {
+                $success = count($ids) . " leads reassigned.";
+            } else {
+                $error = "Failed to reassign leads.";
+            }
+        }
     }
 }
 
 // Get search and filter parameters
 $search = $_GET['search'] ?? '';
 $status = $_GET['status'] ?? '';
+$userId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 0;
 $show_imported = isset($_GET['imported']) && $_GET['imported'] == 1;
 
-// Get accessible lead IDs
-$accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id']);
+// Determine which leads to show
+if (isAdmin()) {
+    // Admin can filter by user or see all
+    $accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id'], true); // all leads
+} else {
+    // Regular user only sees own/shared
+    $accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id']);
+}
 
 $leads = [];
 if (!empty($accessibleIds)) {
-    // Build base query with IN clause
     $placeholders = implode(',', array_fill(0, count($accessibleIds), '?'));
     $sql = "SELECT l.*, 
+                   u.name as owner_name,
                    (l.user_id = ?) as is_owner,
                    (SELECT permission FROM lead_shares WHERE lead_id = l.id AND user_id = ?) as shared_permission
             FROM leads l
+            LEFT JOIN users u ON l.user_id = u.id
             WHERE l.id IN ($placeholders)";
     
-    $params = array_merge([$_SESSION['user_id'], $_SESSION['user_id']], $accessibleIds);
+    $params = [$_SESSION['user_id'], $_SESSION['user_id']];
+    $params = array_merge($params, $accessibleIds);
+    
+    // Apply user filter (admin only)
+    if ($userId > 0 && isAdmin()) {
+        $sql .= " AND l.user_id = ?";
+        $params[] = $userId;
+    }
     
     // Add search condition
     if ($search) {
@@ -74,6 +112,12 @@ if (!empty($accessibleIds)) {
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     $leads = $stmt->fetchAll();
+}
+
+// Get list of users for filter and assignment (admin only)
+$users = [];
+if (isAdmin()) {
+    $users = $pdo->query("SELECT id, name, email FROM users ORDER BY name")->fetchAll();
 }
 
 include 'includes/header.php';
@@ -106,6 +150,9 @@ include 'includes/header.php';
             <a href="download_sample.php" class="btn-secondary">Download Sample CSV</a>
             <a href="export.php" class="btn-secondary">Export to CSV</a>
             <a href="analytics.php" class="btn-secondary">Analytics</a>
+            <?php if (isAdmin()): ?>
+                <a href="admin/team.php" class="btn-secondary">Team Dashboard</a>
+            <?php endif; ?>
         </div>
         <form method="get" style="display: flex; gap: 10px; flex-wrap: wrap;">
             <input type="text" name="search" placeholder="Search leads..." value="<?= htmlspecialchars($search) ?>" style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
@@ -117,19 +164,38 @@ include 'includes/header.php';
                 <option value="not_interested" <?= $status === 'not_interested' ? 'selected' : '' ?>>Not Interested</option>
                 <option value="converted" <?= $status === 'converted' ? 'selected' : '' ?>>Converted</option>
             </select>
+            <?php if (isAdmin() && !empty($users)): ?>
+                <select name="user_id" style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                    <option value="0">All Users</option>
+                    <?php foreach ($users as $user): ?>
+                        <option value="<?= $user['id'] ?>" <?= $userId == $user['id'] ? 'selected' : '' ?>><?= htmlspecialchars($user['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            <?php endif; ?>
             <button type="submit" class="btn">Filter</button>
-            <?php if ($search || $status || $show_imported): ?>
+            <?php if ($search || $status || $userId): ?>
                 <a href="leads.php" class="btn-secondary">Clear</a>
             <?php endif; ?>
         </form>
     </div>
 
     <?php if (count($leads) > 0): ?>
-        <form method="post" id="bulk-delete-form">
-            <div style="margin-bottom: 10px;">
+        <form method="post" id="bulk-actions-form">
+            <div style="margin-bottom: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
                 <button type="button" class="btn-secondary" onclick="selectAll()">Select All</button>
                 <button type="submit" name="delete_selected" class="btn-danger" onclick="return confirm('Delete selected leads?')">Delete Selected</button>
-                <a href="?delete_all=confirm" class="btn-danger" onclick="return confirm('Delete ALL leads? This cannot be undone.')">Delete All</a>
+                <?php if (isAdmin()): ?>
+                    <select name="new_owner" id="new_owner" style="padding: 8px;">
+                        <option value="">Reassign selected to...</option>
+                        <?php foreach ($users as $user): ?>
+                            <option value="<?= $user['id'] ?>"><?= htmlspecialchars($user['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button type="submit" name="assign_owner" class="btn-secondary" onclick="return confirm('Reassign selected leads?')">Assign</button>
+                    <?php if (isAdmin()): ?>
+                        <a href="?delete_all=confirm" class="btn-danger" onclick="return confirm('Delete ALL leads? This cannot be undone.')">Delete All</a>
+                    <?php endif; ?>
+                <?php endif; ?>
             </div>
             <table class="table" id="leads-table">
                 <thead>
@@ -140,6 +206,9 @@ include 'includes/header.php';
                         <th>Phone</th>
                         <th>Email</th>
                         <th>Status</th>
+                        <?php if (isAdmin()): ?>
+                            <th>Owner</th>
+                        <?php endif; ?>
                         <th>Created</th>
                         <th>Quick Actions</th>
                     </tr>
@@ -149,7 +218,7 @@ include 'includes/header.php';
                     <tr data-lead-id="<?= $lead['id'] ?>">
                         <td><input type="checkbox" name="lead_ids[]" value="<?= $lead['id'] ?>" class="lead-checkbox"></td>
                         <td>
-                            <?php if (!$lead['is_owner']): ?>
+                            <?php if (!$lead['is_owner'] && !isAdmin()): ?>
                                 <span class="shared-badge" title="Shared with you (<?= $lead['shared_permission'] ?>)">🔗</span>
                             <?php endif; ?>
                             <span class="editable" data-field="name"><?= htmlspecialchars($lead['name']) ?></span>
@@ -166,6 +235,15 @@ include 'includes/header.php';
                                 <option value="converted" <?= $lead['status'] === 'converted' ? 'selected' : '' ?>>Converted</option>
                             </select>
                         </td>
+                        <?php if (isAdmin()): ?>
+                            <td>
+                                <select class="owner-select" data-lead-id="<?= $lead['id'] ?>">
+                                    <?php foreach ($users as $user): ?>
+                                        <option value="<?= $user['id'] ?>" <?= $lead['user_id'] == $user['id'] ? 'selected' : '' ?>><?= htmlspecialchars($user['name']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                        <?php endif; ?>
                         <td><?= date('M d, Y', strtotime($lead['created_at'])) ?></td>
                         <td>
                             <div class="dropdown">
@@ -175,7 +253,7 @@ include 'includes/header.php';
                                     <a href="lead.php?action=edit&id=<?= $lead['id'] ?>">Edit</a>
                                     <a href="log-call.php?lead_id=<?= $lead['id'] ?>">Log Call</a>
                                     <a href="#" class="quick-note" data-lead-id="<?= $lead['id'] ?>">Add Quick Note</a>
-                                    <?php if ($lead['is_owner']): ?>
+                                    <?php if (canDeleteLead($pdo, $lead['id'], $_SESSION['user_id'])): ?>
                                         <a href="#" class="delete-single" data-lead-id="<?= $lead['id'] ?>" onclick="return confirm('Delete this lead?')">Delete</a>
                                     <?php endif; ?>
                                 </div>
@@ -188,7 +266,7 @@ include 'includes/header.php';
         </form>
     <?php else: ?>
         <p>No leads found. 
-            <?php if ($search || $status || $show_imported): ?>
+            <?php if ($search || $status || $userId): ?>
                 <a href="leads.php">Clear filters</a> or 
             <?php endif; ?>
             <a href="lead.php?action=add">add your first lead</a>.
@@ -297,6 +375,13 @@ include 'includes/header.php';
     font-size: 1.2rem;
     margin-right: 5px;
     cursor: help;
+}
+
+/* Owner select */
+.owner-select {
+    padding: 4px;
+    font-size: 0.9rem;
+    border-radius: 4px;
 }
 </style>
 
@@ -491,6 +576,41 @@ document.querySelectorAll('.delete-single').forEach(link => {
         });
     });
 });
+
+// Add owner change handler for admin
+<?php if (isAdmin()): ?>
+document.querySelectorAll('.owner-select').forEach(select => {
+    select.addEventListener('change', function() {
+        const leadId = this.dataset.leadId;
+        const newOwner = this.value;
+        if (!confirm('Reassign this lead?')) {
+            this.value = this.querySelector('option[selected]')?.value || '';
+            return;
+        }
+        fetch('quick-status.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lead_id: leadId, field: 'owner', value: newOwner })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Update selected attribute
+                this.querySelectorAll('option').forEach(opt => opt.removeAttribute('selected'));
+                this.querySelector(`option[value="${newOwner}"]`).setAttribute('selected', '');
+                showNotification('Owner updated', 'success');
+            } else {
+                alert('Error: ' + data.error);
+                this.value = this.querySelector('option[selected]')?.value || '';
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Network error');
+        });
+    });
+});
+<?php endif; ?>
 
 // Notification helper
 function showNotification(message, type) {
