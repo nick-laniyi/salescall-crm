@@ -24,6 +24,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt = $pdo->prepare("INSERT INTO leads (user_id, name, company, phone, email, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?)");
             if ($stmt->execute([$_SESSION['user_id'], $name, $company, $phone, $email, $status, $notes])) {
                 $newId = $pdo->lastInsertId();
+
+                // Handle custom fields if admin
+                if (isAdmin() && !empty($_POST['custom'])) {
+                    foreach ($_POST['custom'] as $fieldId => $value) {
+                        if (trim($value) !== '') {
+                            $stmt = $pdo->prepare("INSERT INTO lead_custom_values (lead_id, field_id, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)");
+                            $stmt->execute([$newId, $fieldId, $value]);
+                        } else {
+                            $stmt = $pdo->prepare("DELETE FROM lead_custom_values WHERE lead_id = ? AND field_id = ?");
+                            $stmt->execute([$newId, $fieldId]);
+                        }
+                    }
+                }
+
                 header("Location: lead.php?id=$newId&added=1");
                 exit;
             } else {
@@ -36,6 +50,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $stmt = $pdo->prepare("UPDATE leads SET name=?, company=?, phone=?, email=?, status=?, notes=? WHERE id=?");
             if ($stmt->execute([$name, $company, $phone, $email, $status, $notes, $id])) {
+
+                // Handle custom fields if admin
+                if (isAdmin() && !empty($_POST['custom'])) {
+                    foreach ($_POST['custom'] as $fieldId => $value) {
+                        if (trim($value) !== '') {
+                            $stmt = $pdo->prepare("INSERT INTO lead_custom_values (lead_id, field_id, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)");
+                            $stmt->execute([$id, $fieldId, $value]);
+                        } else {
+                            $stmt = $pdo->prepare("DELETE FROM lead_custom_values WHERE lead_id = ? AND field_id = ?");
+                            $stmt->execute([$id, $fieldId]);
+                        }
+                    }
+                }
+
                 header("Location: lead.php?id=$id&updated=1");
                 exit;
             } else {
@@ -72,6 +100,24 @@ if ($action === 'add') {
         'status' => 'new',
         'notes' => ''
     ];
+}
+
+// Load custom fields (only for admin users)
+$customFields = [];
+$customValues = [];
+if (isAdmin()) {
+    $stmt = $pdo->prepare("SELECT * FROM custom_fields WHERE user_id = ? ORDER BY sort_order");
+    $stmt->execute([$_SESSION['user_id']]);
+    $customFields = $stmt->fetchAll();
+
+    // If editing/viewing, get existing custom values
+    if ($id > 0) {
+        $stmt = $pdo->prepare("SELECT field_id, value FROM lead_custom_values WHERE lead_id = ?");
+        $stmt->execute([$id]);
+        foreach ($stmt->fetchAll() as $row) {
+            $customValues[$row['field_id']] = $row['value'];
+        }
+    }
 }
 
 // Fetch call history if viewing a lead
@@ -124,6 +170,31 @@ include 'includes/header.php';
                 <label for="notes">Notes</label>
                 <textarea id="notes" name="notes" rows="4"><?= htmlspecialchars($lead['notes']) ?></textarea>
             </div>
+
+            <?php if (!empty($customFields)): ?>
+                <h3>Custom Fields</h3>
+                <?php foreach ($customFields as $field): ?>
+                    <div class="form-group">
+                        <label for="custom_<?= $field['id'] ?>"><?= htmlspecialchars($field['name']) ?></label>
+                        <?php if ($field['field_type'] === 'text'): ?>
+                            <input type="text" id="custom_<?= $field['id'] ?>" name="custom[<?= $field['id'] ?>]" value="<?= isset($customValues[$field['id']]) ? htmlspecialchars($customValues[$field['id']]) : '' ?>">
+                        <?php elseif ($field['field_type'] === 'number'): ?>
+                            <input type="number" id="custom_<?= $field['id'] ?>" name="custom[<?= $field['id'] ?>]" value="<?= isset($customValues[$field['id']]) ? htmlspecialchars($customValues[$field['id']]) : '' ?>">
+                        <?php elseif ($field['field_type'] === 'date'): ?>
+                            <input type="date" id="custom_<?= $field['id'] ?>" name="custom[<?= $field['id'] ?>]" value="<?= isset($customValues[$field['id']]) ? htmlspecialchars($customValues[$field['id']]) : '' ?>">
+                        <?php elseif ($field['field_type'] === 'select' && $field['options']): ?>
+                            <?php $options = json_decode($field['options'], true); ?>
+                            <select id="custom_<?= $field['id'] ?>" name="custom[<?= $field['id'] ?>]">
+                                <option value="">-- Select --</option>
+                                <?php foreach ($options as $opt): ?>
+                                    <option value="<?= htmlspecialchars($opt) ?>" <?= (isset($customValues[$field['id']]) && $customValues[$field['id']] === $opt) ? 'selected' : '' ?>><?= htmlspecialchars($opt) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        <?php endif; ?>
+                    </div>
+                <?php endforeach; ?>
+            <?php endif; ?>
+
             <button type="submit" class="btn"><?= $action === 'add' ? 'Add Lead' : 'Update Lead' ?></button>
             <a href="leads.php" class="btn-secondary">Cancel</a>
         </form>
@@ -205,6 +276,20 @@ include 'includes/header.php';
             </tr>
         </table>
     </div>
+
+    <?php if (!empty($customFields) && $action === 'view'): ?>
+        <div class="card">
+            <h2>Custom Fields</h2>
+            <table class="table" style="width: auto;">
+                <?php foreach ($customFields as $field): ?>
+                    <tr>
+                        <th><?= htmlspecialchars($field['name']) ?></th>
+                        <td><?= isset($customValues[$field['id']]) ? htmlspecialchars($customValues[$field['id']]) : '—' ?></td>
+                    </tr>
+                <?php endforeach; ?>
+            </table>
+        </div>
+    <?php endif; ?>
 
     <div class="card">
         <h2>Call History</h2>

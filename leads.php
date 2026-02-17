@@ -59,6 +59,19 @@ $status = $_GET['status'] ?? '';
 $userId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 0;
 $show_imported = isset($_GET['imported']) && $_GET['imported'] == 1;
 
+// Advanced filter parameters
+$date_from = $_GET['date_from'] ?? '';
+$date_to = $_GET['date_to'] ?? '';
+$last_contacted = $_GET['last_contacted'] ?? '';
+
+// Load custom fields for admin (needed for custom field filters and display)
+$customFields = [];
+if (isAdmin()) {
+    $stmt = $pdo->prepare("SELECT * FROM custom_fields WHERE user_id = ? ORDER BY sort_order");
+    $stmt->execute([$_SESSION['user_id']]);
+    $customFields = $stmt->fetchAll();
+}
+
 // Determine which leads to show
 if (isAdmin()) {
     // Admin can filter by user or see all
@@ -71,7 +84,9 @@ if (isAdmin()) {
 $leads = [];
 if (!empty($accessibleIds)) {
     $placeholders = implode(',', array_fill(0, count($accessibleIds), '?'));
+    // Add last_contacted subquery
     $sql = "SELECT l.*, 
+                   (SELECT created_at FROM calls WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) as last_contacted,
                    u.name as owner_name,
                    (l.user_id = ?) as is_owner,
                    (SELECT permission FROM lead_shares WHERE lead_id = l.id AND user_id = ?) as shared_permission
@@ -105,6 +120,49 @@ if (!empty($accessibleIds)) {
     if ($show_imported && isset($_SESSION['last_import_time'])) {
         $sql .= " AND l.created_at >= ?";
         $params[] = $_SESSION['last_import_time'];
+    }
+    
+    // Apply date range
+    if (!empty($date_from)) {
+        $sql .= " AND DATE(l.created_at) >= ?";
+        $params[] = $date_from;
+    }
+    if (!empty($date_to)) {
+        $sql .= " AND DATE(l.created_at) <= ?";
+        $params[] = $date_to;
+    }
+    
+    // Apply last contacted filter
+    if (!empty($last_contacted)) {
+        switch ($last_contacted) {
+            case 'today':
+                $sql .= " AND (SELECT MAX(created_at) FROM calls WHERE lead_id = l.id) >= CURDATE()";
+                break;
+            case 'yesterday':
+                $sql .= " AND (SELECT MAX(created_at) FROM calls WHERE lead_id = l.id) >= DATE_SUB(CURDATE(), INTERVAL 1 DAY) AND (SELECT MAX(created_at) FROM calls WHERE lead_id = l.id) < CURDATE()";
+                break;
+            case 'week':
+                $sql .= " AND (SELECT MAX(created_at) FROM calls WHERE lead_id = l.id) >= DATE_SUB(CURDATE(), INTERVAL 1 WEEK)";
+                break;
+            case 'month':
+                $sql .= " AND (SELECT MAX(created_at) FROM calls WHERE lead_id = l.id) >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)";
+                break;
+            case 'older':
+                $sql .= " AND ((SELECT MAX(created_at) FROM calls WHERE lead_id = l.id) < DATE_SUB(CURDATE(), INTERVAL 30 DAY) OR (SELECT MAX(created_at) FROM calls WHERE lead_id = l.id) IS NULL)";
+                break;
+        }
+    }
+    
+    // Apply custom field filters (admin only)
+    if (isAdmin() && !empty($customFields)) {
+        foreach ($customFields as $field) {
+            $paramName = 'custom_' . $field['id'];
+            if (!empty($_GET[$paramName])) {
+                $sql .= " AND EXISTS (SELECT 1 FROM lead_custom_values lcv WHERE lcv.lead_id = l.id AND lcv.field_id = ? AND lcv.value LIKE ?)";
+                $params[] = $field['id'];
+                $params[] = '%' . $_GET[$paramName] . '%';
+            }
+        }
     }
     
     $sql .= " ORDER BY l.created_at DESC";
@@ -142,6 +200,70 @@ include 'includes/header.php';
     <div class="alert alert-error"><?= htmlspecialchars($error) ?></div>
 <?php endif; ?>
 
+<!-- Advanced Filters Card (collapsible) -->
+<div class="card" style="margin-bottom: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3>Advanced Filters</h3>
+        <button id="toggleFilters" class="btn-secondary btn-small">Show</button>
+    </div>
+    <div id="advancedFilters" style="display: none; margin-top: 15px;">
+        <form method="get" id="filterForm">
+            <!-- Preserve existing simple filters -->
+            <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
+            <input type="hidden" name="status" value="<?= htmlspecialchars($status) ?>">
+            <?php if ($userId): ?>
+                <input type="hidden" name="user_id" value="<?= $userId ?>">
+            <?php endif; ?>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                <div class="form-group">
+                    <label>Date Range</label>
+                    <div style="display: flex; gap: 5px;">
+                        <input type="date" name="date_from" value="<?= htmlspecialchars($_GET['date_from'] ?? '') ?>" placeholder="From">
+                        <input type="date" name="date_to" value="<?= htmlspecialchars($_GET['date_to'] ?? '') ?>" placeholder="To">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Last Contacted</label>
+                    <select name="last_contacted">
+                        <option value="">Any</option>
+                        <option value="today" <?= ($_GET['last_contacted'] ?? '') === 'today' ? 'selected' : '' ?>>Today</option>
+                        <option value="yesterday" <?= ($_GET['last_contacted'] ?? '') === 'yesterday' ? 'selected' : '' ?>>Yesterday</option>
+                        <option value="week" <?= ($_GET['last_contacted'] ?? '') === 'week' ? 'selected' : '' ?>>This week</option>
+                        <option value="month" <?= ($_GET['last_contacted'] ?? '') === 'month' ? 'selected' : '' ?>>This month</option>
+                        <option value="older" <?= ($_GET['last_contacted'] ?? '') === 'older' ? 'selected' : '' ?>>Older than 30 days</option>
+                    </select>
+                </div>
+                
+                <?php if (isAdmin() && !empty($customFields)): ?>
+                    <?php foreach ($customFields as $field): ?>
+                        <div class="form-group">
+                            <label><?= htmlspecialchars($field['name']) ?></label>
+                            <?php if ($field['field_type'] === 'select' && $field['options']): ?>
+                                <?php $options = json_decode($field['options'], true); ?>
+                                <select name="custom_<?= $field['id'] ?>">
+                                    <option value="">Any</option>
+                                    <?php foreach ($options as $opt): ?>
+                                        <option value="<?= htmlspecialchars($opt) ?>" <?= (isset($_GET['custom_' . $field['id']]) && $_GET['custom_' . $field['id']] === $opt) ? 'selected' : '' ?>><?= htmlspecialchars($opt) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            <?php else: ?>
+                                <input type="<?= $field['field_type'] === 'number' ? 'number' : 'text' ?>" name="custom_<?= $field['id'] ?>" value="<?= htmlspecialchars($_GET['custom_' . $field['id']] ?? '') ?>" placeholder="Search...">
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+                <button type="submit" class="btn">Apply Filters</button>
+                <a href="leads.php" class="btn-secondary">Clear All</a>
+            </div>
+        </form>
+    </div>
+</div>
+
 <div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
         <div>
@@ -173,7 +295,7 @@ include 'includes/header.php';
                 </select>
             <?php endif; ?>
             <button type="submit" class="btn">Filter</button>
-            <?php if ($search || $status || $userId): ?>
+            <?php if ($search || $status || $userId || $date_from || $date_to || $last_contacted || !empty(array_filter($_GET, fn($key) => str_starts_with($key, 'custom_'), ARRAY_FILTER_USE_KEY))): ?>
                 <a href="leads.php" class="btn-secondary">Clear</a>
             <?php endif; ?>
         </form>
@@ -289,7 +411,7 @@ include 'includes/header.php';
         </form>
     <?php else: ?>
         <p>No leads found. 
-            <?php if ($search || $status || $userId): ?>
+            <?php if ($search || $status || $userId || $date_from || $date_to || $last_contacted || !empty(array_filter($_GET, fn($key) => str_starts_with($key, 'custom_'), ARRAY_FILTER_USE_KEY))): ?>
                 <a href="leads.php">Clear filters</a> or 
             <?php endif; ?>
             <a href="lead.php?action=add">add your first lead</a>.
@@ -467,6 +589,18 @@ include 'includes/header.php';
 </style>
 
 <script>
+// Toggle advanced filters
+document.getElementById('toggleFilters').addEventListener('click', function() {
+    const filters = document.getElementById('advancedFilters');
+    if (filters.style.display === 'none') {
+        filters.style.display = 'block';
+        this.textContent = 'Hide';
+    } else {
+        filters.style.display = 'none';
+        this.textContent = 'Show';
+    }
+});
+
 // Select all functionality
 document.getElementById('select-all').addEventListener('change', function() {
     var checkboxes = document.getElementsByClassName('lead-checkbox');

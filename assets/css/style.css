@@ -631,3 +631,108 @@ body.dark-mode .row-converted {
 .text-center { text-align: center; }
 .mt-20 { margin-top: 20px; }
 .mb-20 { margin-bottom: 20px; }
+
+/* Notification styles */
+.notification-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.notification-bell {
+    background: none;
+    border: none;
+    font-size: 1.4rem;
+    cursor: pointer;
+    position: relative;
+    padding: 5px;
+    color: var(--text-color);
+}
+
+.notification-count {
+    position: absolute;
+    top: 0;
+    right: 0;
+    background-color: #ef4444;
+    color: white;
+    border-radius: 50%;
+    padding: 2px 6px;
+    font-size: 0.7rem;
+    min-width: 18px;
+    text-align: center;
+}
+
+.notification-list {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 100%;
+    width: 350px;
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 1000;
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.notification-dropdown:hover .notification-list {
+    display: block;
+}
+
+.notification-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 15px;
+    border-bottom: 1px solid var(--border-color);
+    font-weight: 600;
+}
+
+.notification-header a {
+    font-size: 0.85rem;
+    color: var(--link-color);
+    text-decoration: none;
+}
+
+.notification-item {
+    padding: 12px 15px;
+    border-bottom: 1px solid var(--border-color);
+    transition: background-color 0.2s;
+}
+
+.notification-item:hover {
+    background-color: var(--table-row-hover);
+}
+
+.notification-item.unread {
+    background-color: rgba(59, 130, 246, 0.1);
+}
+
+.notification-message {
+    margin-bottom: 5px;
+    font-size: 0.95rem;
+}
+
+.notification-time {
+    font-size: 0.8rem;
+    color: var(--footer-text);
+}
+
+.notification-footer {
+    padding: 10px 15px;
+    text-align: center;
+    border-top: 1px solid var(--border-color);
+}
+
+.notification-footer a {
+    color: var(--link-color);
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+
+.notification-loading {
+    padding: 20px;
+    text-align: center;
+    color: var(--footer-text);
+}

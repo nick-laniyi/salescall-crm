@@ -1,6 +1,5 @@
 #!/usr/bin/php
 <?php
-// This script should be run via cron daily
 require_once dirname(__DIR__) . '/includes/config.php';
 
 // Get all follow-ups due today
@@ -15,6 +14,7 @@ $stmt = $pdo->query("
 $rows = $stmt->fetchAll();
 
 foreach ($rows as $row) {
+    // Send email
     $to = $row['email'];
     $subject = "Follow-up Reminder: " . $row['lead_name'];
     $message = "Hello " . $row['user_name'] . ",\n\n";
@@ -23,6 +23,13 @@ foreach ($rows as $row) {
     $message .= "Notes: " . $row['notes'] . "\n\n";
     $message .= "View lead: https://salescalls.naijabased.fun/lead.php?id=" . $row['lead_id'] . "\n";
     $headers = "From: reminders@naijabased.fun\r\n";
-
     mail($to, $subject, $message, $headers);
+
+    // Create in-app notification
+    $stmt2 = $pdo->prepare("INSERT INTO notifications (user_id, type, message, link) VALUES (?, 'reminder', ?, ?)");
+    $stmt2->execute([
+        $row['user_id'],
+        "Follow-up reminder for lead: " . $row['lead_name'],
+        "/lead.php?id=" . $row['lead_id']
+    ]);
 }
