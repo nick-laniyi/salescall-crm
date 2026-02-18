@@ -71,6 +71,13 @@ switch ($field) {
         echo json_encode(['success' => $stmt->execute([(int)$value, $leadId])]);
         break;
 
+    // ── New: last_contacted (hardcoded column) ────────────────────────────
+    case 'last_contacted':
+        // Update the dedicated last_contacted column in leads table
+        $stmt = $pdo->prepare("UPDATE leads SET last_contacted = ? WHERE id = ?");
+        echo json_encode(['success' => $stmt->execute([$value ?: null, $leadId])]);
+        break;
+
     // ── Project column value (lead_column_values table) ───────────────────
     // This is used for date-type project columns (e.g. "Last Contacted").
     // Saves to lead_column_values using UPSERT (INSERT … ON DUPLICATE KEY UPDATE).

@@ -33,7 +33,7 @@ A smart, lightweight CRM designed specifically for sales teams managing cold cal
 
 ## Screenshots
 
-Here are some screenshots of the CRM in action. (Add your actual images to the `screenshots` folder.)
+Here are some screenshots of the CRM in action.
 
 ### Dashboard
 ![Dashboard](screenshots/dashboard.png)
@@ -78,7 +78,7 @@ Here are some screenshots of the CRM in action. (Add your actual images to the `
    cd salescalls-crm
 Set up a local web server (Apache/Nginx) pointing to the project folder. Ensure mod_rewrite is enabled if you plan to use clean URLs later.
 
-Create a MySQL database and run the SQL from database/schema.sql (or the combined schema provided in the README). The full schema includes:
+Create a MySQL database and run the SQL from database/schema.sql. The full schema includes:
 
 Users table (with role column)
 
@@ -105,11 +105,13 @@ apache
     ServerName salescalls.local
     DocumentRoot /path/to/salescalls-crm
 </VirtualHost>
+
 Create a temp_uploads directory in the project root with write permissions:
 
 bash
 mkdir temp_uploads
 chmod 777 temp_uploads
+
 Access the CRM at http://salescalls.local and register a new user. The first user will be a regular user; to make yourself admin, manually update the role column in the users table to 'admin'.
 
 Production Deployment
@@ -125,10 +127,13 @@ Create a temp_uploads directory with write permissions (e.g., 755 or 777 dependi
 
 Set up a cron job for daily follow-up emails and notifications:
 
-text
+
 0 8 * * * /usr/bin/php /path/to/salescalls-crm/cron/send-reminders.php
+
+
 File Structure
-text
+
+
 salescalls-crm/
 ├── admin/
 │   ├── projects.php
@@ -175,6 +180,7 @@ salescalls-crm/
 ├── quick-status.php
 ├── register.php
 └── README.md
+
 Configuration
 Database: Edit includes/config.php with your DB details.
 

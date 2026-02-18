@@ -87,7 +87,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Load unread notifications count
 function loadNotificationCount() {
-    fetch('get_notifications.php?count=1')
+    fetch('/get_notifications.php?count=1')
         .then(response => response.json())
         .then(data => {
             const countSpan = document.getElementById('notificationCount');
@@ -102,7 +102,7 @@ function loadNotificationCount() {
 
 // Load notification list dropdown
 function loadNotifications() {
-    fetch('get_notifications.php?limit=5')
+    fetch('/get_notifications.php?limit=5')
         .then(response => response.json())
         .then(data => {
             const container = document.getElementById('notificationItems');
