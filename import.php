@@ -9,7 +9,6 @@ $step = isset($_POST['step']) ? (int)$_POST['step'] : 1;
 
 // Determine a writable temp directory
 function getWritableTempDir() {
-    // Try project temp_uploads first
     $projectTemp = __DIR__ . '/temp_uploads';
     if (is_dir($projectTemp) && is_writable($projectTemp)) {
         return $projectTemp;
@@ -19,7 +18,6 @@ function getWritableTempDir() {
             return $projectTemp;
         }
     }
-    // Fallback to system temp
     $sysTemp = sys_get_temp_dir() . '/salescalls_imports';
     if (!is_dir($sysTemp)) {
         mkdir($sysTemp, 0777, true);
@@ -46,16 +44,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file']) && $ste
     if ($file['error'] !== UPLOAD_ERR_OK) {
         $errors[] = 'File upload failed.';
     } else {
-        // Check file size (limit 2MB)
         if ($file['size'] > 2 * 1024 * 1024) {
             $errors[] = 'File size exceeds 2MB limit.';
         } else {
-            // Generate unique filename and move to temp directory
             $tempFilename = uniqid('import_') . '_' . basename($file['name']);
             $tempPath = $tempDir . '/' . $tempFilename;
             
             if (move_uploaded_file($file['tmp_name'], $tempPath)) {
-                // Parse first row to get headers
                 $handle = fopen($tempPath, 'r');
                 if ($handle) {
                     $headers = fgetcsv($handle, 0, $delimiter);
@@ -65,7 +60,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file']) && $ste
                         $errors[] = "Could not parse CSV headers.";
                         unlink($tempPath);
                     } else {
-                        // Store file info in session for next step
                         $_SESSION['import_file'] = [
                             'path' => $tempPath,
                             'name' => $file['name'],
@@ -86,7 +80,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file']) && $ste
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_import']) && $step === 2) {
-    // Step 2: User confirmed mapping and project
     $project_action = $_POST['project_action'] ?? 'existing';
     $project_id = null;
     
@@ -103,13 +96,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_import']) && 
                 $errors[] = "Please select a project.";
             }
         } else {
-            // Create new project
             $project_name = trim($_POST['new_project_name'] ?? '');
             if (empty($project_name)) {
                 $errors[] = "New project name required.";
             }
             
-            // Get column mappings
             $col_names = $_POST['col_name'] ?? [];
             $col_types = $_POST['col_type'] ?? [];
             $col_options = $_POST['col_options'] ?? [];
@@ -119,7 +110,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_import']) && 
             }
             
             if (empty($errors)) {
-                // Create project and columns
                 $pdo->beginTransaction();
                 try {
                     $stmt = $pdo->prepare("INSERT INTO projects (user_id, name, description) VALUES (?, ?, ?)");
@@ -146,32 +136,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_import']) && 
         }
         
         if (empty($errors) && $project_id && file_exists($tempPath)) {
-            // Now perform the actual import
             $handle = fopen($tempPath, 'r');
             $headers = $fileData['headers'];
             $delimiter = $fileData['delimiter'];
             
-            // Skip header row
-            fgetcsv($handle, 0, $delimiter);
+            fgetcsv($handle, 0, $delimiter); // Skip header row
             
             $importedCount = 0;
             $skippedCount = 0;
             $lineNumber = 1;
             
-            // Prepare insert statements
             $leadStmt = $pdo->prepare("INSERT INTO leads (user_id, project_id, name, company, phone, email, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
             $valueStmt = $pdo->prepare("INSERT INTO lead_column_values (lead_id, column_id, value) VALUES (?, ?, ?)");
             
-            // Get project columns (for mapping)
             $colStmt = $pdo->prepare("SELECT id, name FROM project_columns WHERE project_id = ?");
             $colStmt->execute([$project_id]);
-            $projectColumns = $colStmt->fetchAll(PDO::FETCH_KEY_PAIR); // name => id
+            $projectColumns = $colStmt->fetchAll(PDO::FETCH_KEY_PAIR);
             
             while (($data = fgetcsv($handle, 0, $delimiter)) !== false) {
                 $lineNumber++;
                 if (count($data) < 1) continue;
                 
-                // Extract standard fields (assuming first few columns)
                 $name = trim($data[0] ?? '');
                 $company = trim($data[1] ?? '');
                 $phone = trim($data[2] ?? '');
@@ -184,44 +169,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_import']) && 
                     continue;
                 }
                 
-                // Validate status
                 $validStatuses = ['new', 'contacted', 'interested', 'not_interested', 'converted'];
                 if (!in_array($status, $validStatuses)) {
                     $status = 'new';
                 }
                 
-                // Insert lead
-                $leadStmt->execute([$_SESSION['user_id'], $project_id, $name, $company, $phone, $email, $status, $notes]);
-                $leadId = $pdo->lastInsertId();
+                // Truncate phone if too long (assuming column length is 50)
+                if (strlen($phone) > 50) {
+                    $phone = substr($phone, 0, 50);
+                    $errors[] = "Line $lineNumber: Phone number truncated to 50 characters.";
+                }
                 
-                // Insert custom values based on remaining columns (starting from index 6)
-                for ($i = 6; $i < count($data); $i++) {
-                    $headerName = $headers[$i] ?? '';
-                    if (empty($headerName)) continue;
-                    $value = trim($data[$i] ?? '');
-                    if (empty($value)) continue;
+                try {
+                    $leadStmt->execute([$_SESSION['user_id'], $project_id, $name, $company, $phone, $email, $status, $notes]);
+                    $leadId = $pdo->lastInsertId();
                     
-                    // Find column id by header name (case-insensitive)
-                    $colId = null;
-                    foreach ($projectColumns as $colName => $cid) {
-                        if (strcasecmp($colName, $headerName) === 0) {
-                            $colId = $cid;
-                            break;
+                    for ($i = 6; $i < count($data); $i++) {
+                        $headerName = $headers[$i] ?? '';
+                        if (empty($headerName)) continue;
+                        $value = trim($data[$i] ?? '');
+                        if (empty($value)) continue;
+                        
+                        $colId = null;
+                        foreach ($projectColumns as $colName => $cid) {
+                            if (strcasecmp($colName, $headerName) === 0) {
+                                $colId = $cid;
+                                break;
+                            }
+                        }
+                        if ($colId) {
+                            $valueStmt->execute([$leadId, $colId, $value]);
                         }
                     }
-                    if ($colId) {
-                        $valueStmt->execute([$leadId, $colId, $value]);
-                    }
+                    $importedCount++;
+                } catch (PDOException $e) {
+                    $skippedCount++;
+                    $errors[] = "Line $lineNumber: Database error - " . $e->getMessage();
                 }
-                $importedCount++;
             }
             fclose($handle);
-            
-            // Clean up temp file
             unlink($tempPath);
             unset($_SESSION['import_file']);
             
-            header("Location: leads.php?imported=1&count=$importedCount&skipped=$skippedCount");
+            header("Location: leads.php?project_id=$project_id&imported=1&count=$importedCount&skipped=$skippedCount");
             exit;
         } else {
             if (!file_exists($tempPath)) {
@@ -272,10 +262,7 @@ include 'includes/header.php';
         </form>
     </div>
 <?php elseif ($step === 2 && isset($_SESSION['import_file'])): ?>
-    <!-- Step 2: Map columns and choose project -->
-    <?php
-    $headers = $_SESSION['import_file']['headers'];
-    ?>
+    <?php $headers = $_SESSION['import_file']['headers']; ?>
     <div class="card">
         <h2>Step 2: Map to Project</h2>
         <form method="post">
@@ -349,7 +336,6 @@ include 'includes/header.php';
         optionsDiv.style.display = select.value === 'select' ? 'block' : 'none';
     }
     
-    // Initialize options visibility
     document.querySelectorAll('.col-type').forEach(select => {
         toggleOptions(select);
     });
