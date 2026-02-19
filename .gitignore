@@ -1,5 +1,10 @@
-# Ignore configuration with secrets
+# Ignore actual configuration with secrets
 /includes/config.php
+/includes/email_config.php
+
+# But keep example files
+!includes/config.example.php
+!includes/email_config.example.php
 
 # OS files
 .DS_Store
@@ -18,6 +23,3 @@ Thumbs.db
 
 # Installation lock file
 /includes/installed.lock
-
-# Auto-generated email config
-/includes/email_config.php
