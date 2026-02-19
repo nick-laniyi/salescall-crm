@@ -32,9 +32,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if (trim($value) !== '') {
                             $stmt = $pdo->prepare("INSERT INTO lead_column_values (lead_id, column_id, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)");
                             $stmt->execute([$newId, $colId, $value]);
-                        } else {
-                            $stmt = $pdo->prepare("DELETE FROM lead_column_values WHERE lead_id = ? AND column_id = ?");
-                            $stmt->execute([$newId, $colId]);
                         }
                     }
                 }
@@ -59,6 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $stmt = $pdo->prepare("INSERT INTO lead_column_values (lead_id, column_id, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)");
                             $stmt->execute([$id, $colId, $value]);
                         } else {
+                            // Delete empty values
                             $stmt = $pdo->prepare("DELETE FROM lead_column_values WHERE lead_id = ? AND column_id = ?");
                             $stmt->execute([$id, $colId]);
                         }
@@ -77,7 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Fetch lead data for editing or viewing
 $lead = null;
 if ($id) {
-    $stmt = $pdo->prepare("SELECT * FROM leads WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT l.*, p.name as project_name FROM leads l LEFT JOIN projects p ON l.project_id = p.id WHERE l.id = ?");
     $stmt->execute([$id]);
     $lead = $stmt->fetch();
     if (!$lead && $action !== 'add') {
@@ -100,15 +98,36 @@ if ($action === 'add') {
         'email' => '',
         'status' => 'new',
         'notes' => '',
-        'project_id' => 0
+        'project_id' => 0,
+        'project_name' => ''
     ];
 }
 
-// Get all projects (for dropdown)
+// Get all projects the user has access to (owned or shared leads in)
 $projects = [];
-$stmt = $pdo->prepare("SELECT id, name FROM projects WHERE user_id = ? ORDER BY name");
-$stmt->execute([$_SESSION['user_id']]);
-$projects = $stmt->fetchAll();
+$accessibleIds = getAccessibleLeadIds($pdo, $_SESSION['user_id']);
+if (!empty($accessibleIds)) {
+    $ph = implode(',', array_fill(0, count($accessibleIds), '?'));
+    $projStmt = $pdo->prepare(
+        "SELECT DISTINCT p.id, p.name
+         FROM projects p
+         WHERE p.user_id = ?
+            OR EXISTS (
+                SELECT 1 FROM leads l
+                WHERE l.project_id = p.id AND l.id IN ($ph)
+            )
+         ORDER BY p.name"
+    );
+    $params = [$_SESSION['user_id']];
+    $params = array_merge($params, $accessibleIds);
+    $projStmt->execute($params);
+    $projects = $projStmt->fetchAll();
+} else {
+    // Only owned projects
+    $projStmt = $pdo->prepare("SELECT id, name FROM projects WHERE user_id = ? ORDER BY name");
+    $projStmt->execute([$_SESSION['user_id']]);
+    $projects = $projStmt->fetchAll();
+}
 
 // For existing lead, get its project
 $currentProjectId = $lead ? (int)$lead['project_id'] : 0;
@@ -140,9 +159,17 @@ if ($id > 0 && $selectedProjectId > 0) {
 // Fetch call history if viewing a lead
 $calls = [];
 if ($id && $action === 'view' && $lead) {
-    $stmt = $pdo->prepare("SELECT * FROM calls WHERE lead_id = ? ORDER BY created_at DESC");
+    $stmt = $pdo->prepare("SELECT c.*, u.name as user_name FROM calls c LEFT JOIN users u ON c.user_id = u.id WHERE c.lead_id = ? ORDER BY c.created_at DESC");
     $stmt->execute([$id]);
     $calls = $stmt->fetchAll();
+}
+
+// Fetch email history if viewing a lead
+$emails = [];
+if ($id && $action === 'view' && $lead) {
+    $stmt = $pdo->prepare("SELECT * FROM email_logs WHERE lead_id = ? ORDER BY sent_at DESC");
+    $stmt->execute([$id]);
+    $emails = $stmt->fetchAll();
 }
 
 include 'includes/header.php';
@@ -167,7 +194,7 @@ include 'includes/header.php';
             </div>
             <div class="form-group">
                 <label for="phone">Phone</label>
-                <input type="text" id="phone" name="phone" value="<?= htmlspecialchars($lead['phone']) ?>">
+                <input type="tel" id="phone" name="phone" value="<?= htmlspecialchars($lead['phone']) ?>">
             </div>
             <div class="form-group">
                 <label for="email">Email</label>
@@ -188,18 +215,15 @@ include 'includes/header.php';
                 <textarea id="notes" name="notes" rows="4"><?= htmlspecialchars($lead['notes']) ?></textarea>
             </div>
 
-            <!-- Project selection with "New Project" button -->
-            <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-                <div style="flex: 1;">
-                    <label for="project_id">Project (Folder)</label>
-                    <select id="project_id" name="project_id" onchange="loadProjectColumns(this.value)" style="width: 100%;">
-                        <option value="">-- Select Project --</option>
-                        <?php foreach ($projects as $p): ?>
-                            <option value="<?= $p['id'] ?>" <?= $selectedProjectId == $p['id'] ? 'selected' : '' ?>><?= htmlspecialchars($p['name']) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <button type="button" class="btn-secondary btn-small" style="margin-top: 22px;" onclick="openNewProjectModal()">+ New Project</button>
+            <!-- Project selection -->
+            <div class="form-group">
+                <label for="project_id">Project (Folder)</label>
+                <select id="project_id" name="project_id" onchange="loadProjectColumns(this.value)" style="width: 100%;">
+                    <option value="">-- Select Project --</option>
+                    <?php foreach ($projects as $p): ?>
+                        <option value="<?= $p['id'] ?>" <?= $selectedProjectId == $p['id'] ? 'selected' : '' ?>><?= htmlspecialchars($p['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
             </div>
 
             <!-- Dynamic custom fields container -->
@@ -211,15 +235,20 @@ include 'includes/header.php';
                             <label for="col_<?= $col['id'] ?>"><?= htmlspecialchars($col['name']) ?></label>
                             <?php if ($col['column_type'] === 'text'): ?>
                                 <input type="text" id="col_<?= $col['id'] ?>" name="custom[<?= $col['id'] ?>]" value="<?= isset($customValues[$col['id']]) ? htmlspecialchars($customValues[$col['id']]) : '' ?>">
+                            <?php elseif ($col['column_type'] === 'email'): ?>
+                                <input type="email" id="col_<?= $col['id'] ?>" name="custom[<?= $col['id'] ?>]" value="<?= isset($customValues[$col['id']]) ? htmlspecialchars($customValues[$col['id']]) : '' ?>">
+                            <?php elseif ($col['column_type'] === 'phone'): ?>
+                                <input type="tel" id="col_<?= $col['id'] ?>" name="custom[<?= $col['id'] ?>]" value="<?= isset($customValues[$col['id']]) ? htmlspecialchars($customValues[$col['id']]) : '' ?>">
                             <?php elseif ($col['column_type'] === 'number'): ?>
                                 <input type="number" id="col_<?= $col['id'] ?>" name="custom[<?= $col['id'] ?>]" value="<?= isset($customValues[$col['id']]) ? htmlspecialchars($customValues[$col['id']]) : '' ?>">
                             <?php elseif ($col['column_type'] === 'date'): ?>
                                 <input type="date" id="col_<?= $col['id'] ?>" name="custom[<?= $col['id'] ?>]" value="<?= isset($customValues[$col['id']]) ? htmlspecialchars($customValues[$col['id']]) : '' ?>">
                             <?php elseif ($col['column_type'] === 'select' && $col['options']): ?>
-                                <?php $options = json_decode($col['options'], true); ?>
+                                <?php $options = explode("\n", trim($col['options'])); ?>
                                 <select id="col_<?= $col['id'] ?>" name="custom[<?= $col['id'] ?>]">
                                     <option value="">-- Select --</option>
                                     <?php foreach ($options as $opt): ?>
+                                        <?php $opt = trim($opt); if (empty($opt)) continue; ?>
                                         <option value="<?= htmlspecialchars($opt) ?>" <?= (isset($customValues[$col['id']]) && $customValues[$col['id']] === $opt) ? 'selected' : '' ?>><?= htmlspecialchars($opt) ?></option>
                                     <?php endforeach; ?>
                                 </select>
@@ -234,61 +263,47 @@ include 'includes/header.php';
         </form>
     </div>
 
-    <!-- New Project Modal -->
-    <div id="newProjectModal" class="modal">
-        <div class="modal-content" style="width: 600px; max-width: 90%;">
-            <span class="close">&times;</span>
-            <h3>Create New Project</h3>
-            <form id="newProjectForm">
-                <div class="form-group">
-                    <label for="project_name">Project Name *</label>
-                    <input type="text" id="project_name" name="name" required>
-                </div>
-                <div class="form-group">
-                    <label for="project_description">Description</label>
-                    <textarea id="project_description" name="description" rows="2"></textarea>
-                </div>
-                
-                <h4>Columns</h4>
-                <div id="columns-container">
-                    <!-- Column rows will be added here -->
-                </div>
-                <button type="button" id="addColumnBtn" class="btn-secondary btn-small">+ Add Column</button>
-                
-                <div style="margin-top: 20px;">
-                    <button type="submit" class="btn">Create Project</button>
-                    <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
     <script>
-    // Function to load project columns dynamically (existing)
+    // Function to load project columns dynamically
     function loadProjectColumns(projectId) {
         if (!projectId) {
             document.getElementById('custom-fields-container').innerHTML = '';
             return;
         }
-        fetch('get_project_columns.php?project_id=' + projectId)
+        
+        // For existing leads, we need to pass lead_id to get existing values
+        const leadId = <?= $id ?: 0 ?>;
+        const url = leadId ? 'get_project_columns.php?project_id=' + projectId + '&lead_id=' + leadId : 'get_project_columns.php?project_id=' + projectId;
+        
+        fetch(url)
             .then(response => response.json())
-            .then(columns => {
+            .then(data => {
                 let html = '<h3>Custom Fields</h3>';
-                columns.forEach(col => {
+                data.columns.forEach(col => {
                     html += '<div class="form-group">';
                     html += '<label for="col_' + col.id + '">' + col.name + '</label>';
+                    
+                    const value = data.values && data.values[col.id] ? data.values[col.id] : '';
+                    
                     if (col.column_type === 'text') {
-                        html += '<input type="text" id="col_' + col.id + '" name="custom[' + col.id + ']">';
+                        html += '<input type="text" id="col_' + col.id + '" name="custom[' + col.id + ']" value="' + escapeHtml(value) + '">';
+                    } else if (col.column_type === 'email') {
+                        html += '<input type="email" id="col_' + col.id + '" name="custom[' + col.id + ']" value="' + escapeHtml(value) + '">';
+                    } else if (col.column_type === 'phone') {
+                        html += '<input type="tel" id="col_' + col.id + '" name="custom[' + col.id + ']" value="' + escapeHtml(value) + '">';
                     } else if (col.column_type === 'number') {
-                        html += '<input type="number" id="col_' + col.id + '" name="custom[' + col.id + ']">';
+                        html += '<input type="number" id="col_' + col.id + '" name="custom[' + col.id + ']" value="' + escapeHtml(value) + '">';
                     } else if (col.column_type === 'date') {
-                        html += '<input type="date" id="col_' + col.id + '" name="custom[' + col.id + ']">';
+                        html += '<input type="date" id="col_' + col.id + '" name="custom[' + col.id + ']" value="' + escapeHtml(value) + '">';
                     } else if (col.column_type === 'select' && col.options) {
-                        let options = JSON.parse(col.options);
+                        let options = col.options.split('\n');
                         html += '<select id="col_' + col.id + '" name="custom[' + col.id + ']">';
                         html += '<option value="">-- Select --</option>';
                         options.forEach(opt => {
-                            html += '<option value="' + opt + '">' + opt + '</option>';
+                            opt = opt.trim();
+                            if (opt) {
+                                html += '<option value="' + escapeHtml(opt) + '" ' + (value === opt ? 'selected' : '') + '>' + escapeHtml(opt) + '</option>';
+                            }
                         });
                         html += '</select>';
                     }
@@ -299,96 +314,13 @@ include 'includes/header.php';
             .catch(error => console.error('Error loading columns:', error));
     }
 
-    // Modal functions
-    function openNewProjectModal() {
-        document.getElementById('newProjectModal').style.display = 'block';
-        // Add one empty column row by default
-        addColumnRow();
+    // Helper function to escape HTML
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
-
-    function closeModal() {
-        document.getElementById('newProjectModal').style.display = 'none';
-        document.getElementById('columns-container').innerHTML = '';
-    }
-
-    // Add a column row
-    function addColumnRow() {
-        const container = document.getElementById('columns-container');
-        const row = document.createElement('div');
-        row.className = 'column-row';
-        row.style.display = 'flex';
-        row.style.gap = '10px';
-        row.style.marginBottom = '10px';
-        row.style.alignItems = 'center';
-        row.innerHTML = `
-            <input type="text" name="col_name[]" placeholder="Column name" style="flex: 2;" required>
-            <select name="col_type[]" style="flex: 1;">
-                <option value="text">Text</option>
-                <option value="number">Number</option>
-                <option value="date">Date</option>
-                <option value="select">Dropdown</option>
-            </select>
-            <textarea name="col_options[]" placeholder="Options (one per line, for dropdown)" style="flex: 2; display: none;"></textarea>
-            <button type="button" class="btn-danger btn-small" onclick="this.parentElement.remove()">✕</button>
-        `;
-        container.appendChild(row);
-        
-        // Show/hide options based on type
-        const typeSelect = row.querySelector('select');
-        const optionsTextarea = row.querySelector('textarea');
-        typeSelect.addEventListener('change', function() {
-            optionsTextarea.style.display = this.value === 'select' ? 'block' : 'none';
-            if (this.value !== 'select') optionsTextarea.removeAttribute('required');
-            else optionsTextarea.setAttribute('required', 'required');
-        });
-    }
-
-    // Add click handler for "+ Add Column" button
-    document.getElementById('addColumnBtn').addEventListener('click', addColumnRow);
-
-    // Handle form submission
-    document.getElementById('newProjectForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        
-        const formData = new FormData(this);
-        fetch('quick_create_project.php', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                // Add new option to project dropdown
-                const select = document.getElementById('project_id');
-                const option = document.createElement('option');
-                option.value = data.project_id;
-                option.text = data.project_name;
-                select.appendChild(option);
-                select.value = data.project_id;
-                
-                // Trigger change to load columns
-                loadProjectColumns(data.project_id);
-                
-                closeModal();
-            } else {
-                alert('Error: ' + data.error);
-            }
-        })
-        .catch(error => {
-            alert('Network error');
-            console.error(error);
-        });
-    });
-
-    // Close modal when clicking on X or outside
-    window.onclick = function(event) {
-        const modal = document.getElementById('newProjectModal');
-        if (event.target == modal) {
-            closeModal();
-        }
-    }
-
-    document.querySelector('#newProjectModal .close').addEventListener('click', closeModal);
     </script>
 
 <?php elseif ($action === 'view' && $lead): ?>
@@ -403,19 +335,23 @@ include 'includes/header.php';
     <?php endif; ?>
 
     <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
             <h2>Lead Details</h2>
-            <div>
+            <div class="action-buttons">
                 <?php if (canEditLead($pdo, $lead['id'], $_SESSION['user_id'])): ?>
                     <a href="lead.php?action=edit&id=<?= $lead['id'] ?>" class="btn-secondary">Edit</a>
                 <?php endif; ?>
                 <a href="log-call.php?lead_id=<?= $lead['id'] ?>" class="btn">Log Call</a>
+                <?php if (!empty($lead['email'])): ?>
+                    <a href="email/compose.php?lead_id=<?= $lead['id'] ?>&email=<?= urlencode($lead['email']) ?>" class="btn-secondary" target="_blank">Send Email</a>
+                <?php endif; ?>
+                <a href="email/history.php?lead_id=<?= $lead['id'] ?>" class="btn-secondary">Email History</a>
             </div>
         </div>
 
         <table class="table" style="width: auto;">
             <tr>
-                <th>Owner</th>
+                <th style="width: 150px;">Owner</th>
                 <td><?= $lead['user_id'] == $_SESSION['user_id'] ? 'You' : 'Shared with you' ?></td>
             </tr>
             <tr>
@@ -442,6 +378,7 @@ include 'includes/header.php';
                     <?php if (!empty($lead['email'])): ?>
                         <div class="contact-actions">
                             <span class="contact-icon email copy-email" data-email="<?= htmlspecialchars($lead['email']) ?>" title="Copy email">📧</span>
+                            <a href="email/compose.php?lead_id=<?= $lead['id'] ?>&email=<?= urlencode($lead['email']) ?>" class="contact-icon" title="Send email" target="_blank">✉️</a>
                             <?= htmlspecialchars($lead['email']) ?>
                         </div>
                     <?php else: ?>
@@ -451,20 +388,27 @@ include 'includes/header.php';
             </tr>
             <tr>
                 <th>Status</th>
-                <td><?= htmlspecialchars($lead['status']) ?></td>
+                <td><span class="status-badge status-<?= str_replace('_', '-', $lead['status']) ?>"><?= ucfirst(str_replace('_', ' ', $lead['status'])) ?></span></td>
             </tr>
             <tr>
                 <th>Project</th>
+                <td><?= htmlspecialchars($lead['project_name'] ?: '—') ?></td>
+            </tr>
+            <tr>
+                <th>Last Contacted</th>
                 <td>
-                    <?php
-                    if ($lead['project_id']) {
-                        $stmt = $pdo->prepare("SELECT name FROM projects WHERE id = ?");
-                        $stmt->execute([$lead['project_id']]);
-                        $projectName = $stmt->fetchColumn();
-                        echo htmlspecialchars($projectName ?: '—');
-                    } else {
-                        echo '—';
-                    }
+                    <?php 
+                    // Get last contact date from calls or email logs
+                    $stmt = $pdo->prepare("
+                        SELECT MAX(date) as last_contact FROM (
+                            SELECT created_at as date FROM calls WHERE lead_id = ?
+                            UNION
+                            SELECT sent_at as date FROM email_logs WHERE lead_id = ? AND status = 'sent'
+                        ) as combined
+                    ");
+                    $stmt->execute([$lead['id'], $lead['id']]);
+                    $lastContact = $stmt->fetchColumn();
+                    echo $lastContact ? date('M d, Y', strtotime($lastContact)) : 'Never';
                     ?>
                 </td>
             </tr>
@@ -483,14 +427,34 @@ include 'includes/header.php';
         </table>
     </div>
 
-    <?php if (!empty($projectColumns) && $action === 'view'): ?>
+    <?php if (!empty($projectColumns)): ?>
         <div class="card">
             <h2>Custom Fields</h2>
             <table class="table" style="width: auto;">
                 <?php foreach ($projectColumns as $col): ?>
                     <tr>
-                        <th><?= htmlspecialchars($col['name']) ?></th>
-                        <td><?= isset($customValues[$col['id']]) ? htmlspecialchars($customValues[$col['id']]) : '—' ?></td>
+                        <th style="width: 150px;"><?= htmlspecialchars($col['name']) ?></th>
+                        <td>
+                            <?php if (isset($customValues[$col['id']])): ?>
+                                <?php if ($col['column_type'] === 'email'): ?>
+                                    <div class="contact-actions">
+                                        <span class="contact-icon email copy-email" data-email="<?= htmlspecialchars($customValues[$col['id']]) ?>" title="Copy email">📧</span>
+                                        <a href="email/compose.php?lead_id=<?= $lead['id'] ?>&email=<?= urlencode($customValues[$col['id']]) ?>" class="contact-icon" title="Send email" target="_blank">✉️</a>
+                                        <?= htmlspecialchars($customValues[$col['id']]) ?>
+                                    </div>
+                                <?php elseif ($col['column_type'] === 'phone'): ?>
+                                    <div class="contact-actions">
+                                        <a href="tel:<?= urlencode($customValues[$col['id']]) ?>" class="contact-icon" title="Call">📞</a>
+                                        <a href="https://wa.me/<?= preg_replace('/[^0-9]/', '', $customValues[$col['id']]) ?>" target="_blank" class="contact-icon whatsapp" title="WhatsApp">💬</a>
+                                        <?= htmlspecialchars($customValues[$col['id']]) ?>
+                                    </div>
+                                <?php else: ?>
+                                    <?= htmlspecialchars($customValues[$col['id']]) ?>
+                                <?php endif; ?>
+                            <?php else: ?>
+                                —
+                            <?php endif; ?>
+                        </td>
                     </tr>
                 <?php endforeach; ?>
             </table>
@@ -504,8 +468,9 @@ include 'includes/header.php';
                 <thead>
                     <tr>
                         <th>Date</th>
+                        <th>User</th>
                         <th>Outcome</th>
-                        <th>Duration (sec)</th>
+                        <th>Duration</th>
                         <th>Follow-up</th>
                         <th>Notes</th>
                     </tr>
@@ -514,9 +479,10 @@ include 'includes/header.php';
                     <?php foreach ($calls as $call): ?>
                     <tr>
                         <td><?= date('M d, Y H:i', strtotime($call['created_at'])) ?></td>
-                        <td><?= htmlspecialchars($call['outcome']) ?></td>
-                        <td><?= htmlspecialchars($call['duration']) ?></td>
-                        <td><?= htmlspecialchars($call['follow_up_date'] ?: '—') ?></td>
+                        <td><?= htmlspecialchars($call['user_name'] ?: 'Unknown') ?></td>
+                        <td><span class="status-badge status-<?= str_replace('_', '-', $call['outcome']) ?>"><?= ucfirst(str_replace('_', ' ', $call['outcome'])) ?></span></td>
+                        <td><?= $call['duration'] ? $call['duration'] . 's' : '—' ?></td>
+                        <td><?= $call['follow_up_date'] ? date('M d, Y', strtotime($call['follow_up_date'])) : '—' ?></td>
                         <td><?= nl2br(htmlspecialchars($call['notes'] ?: '—')) ?></td>
                     </tr>
                     <?php endforeach; ?>
@@ -525,6 +491,60 @@ include 'includes/header.php';
         <?php else: ?>
             <p>No calls logged yet. <a href="log-call.php?lead_id=<?= $lead['id'] ?>">Log your first call</a>.</p>
         <?php endif; ?>
+    </div>
+
+    <div class="card">
+        <h2>Email History</h2>
+        <?php if (count($emails) > 0): ?>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Recipient</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($emails as $email): ?>
+                    <tr>
+                        <td><?= date('M d, Y H:i', strtotime($email['sent_at'])) ?></td>
+                        <td><?= htmlspecialchars($email['recipient_email']) ?></td>
+                        <td><?= htmlspecialchars($email['subject']) ?></td>
+                        <td><span class="status-badge status-<?= $email['status'] ?>"><?= ucfirst($email['status']) ?></span></td>
+                        <td>
+                            <a href="#" class="btn-secondary btn-small view-email" 
+                               data-subject="<?= htmlspecialchars($email['subject']) ?>"
+                               data-recipient="<?= htmlspecialchars($email['recipient_email']) ?>"
+                               data-body="<?= htmlspecialchars($email['body']) ?>"
+                               data-date="<?= date('M d, Y H:i', strtotime($email['sent_at'])) ?>">
+                                View
+                            </a>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php else: ?>
+            <p>No emails sent yet. <?php if (!empty($lead['email'])): ?><a href="email/compose.php?lead_id=<?= $lead['id'] ?>&email=<?= urlencode($lead['email']) ?>" target="_blank">Send your first email</a>.<?php endif; ?></p>
+        <?php endif; ?>
+    </div>
+
+    <!-- Email View Modal -->
+    <div id="emailModal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 600px;">
+            <span class="close" onclick="closeEmailModal()">&times;</span>
+            <h3 id="modalSubject"></h3>
+            <div style="margin-bottom: 15px; color: var(--footer-text);">
+                <strong>To:</strong> <span id="modalRecipient"></span><br>
+                <strong>Sent:</strong> <span id="modalDate"></span>
+            </div>
+            <div id="modalBody" style="white-space: pre-wrap; background: var(--input-bg); padding: 15px; border-radius: 4px; max-height: 400px; overflow-y: auto;"></div>
+            <div style="text-align: right; margin-top: 15px;">
+                <button class="btn-secondary" onclick="closeEmailModal()">Close</button>
+            </div>
+        </div>
     </div>
 
     <!-- Sharing Section (only visible to owner) -->
@@ -552,106 +572,37 @@ include 'includes/header.php';
             <button type="submit" class="btn">Add Share</button>
         </form>
     </div>
-
-    <script>
-    // Load users and current shares
-    document.addEventListener('DOMContentLoaded', function() {
-        loadShares();
-        loadUsers();
-    });
-
-    function loadShares() {
-        fetch('share.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'action=list&lead_id=<?= $lead['id'] ?>'
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                let html = '<h4>Currently shared with:</h4><ul>';
-                data.shares.forEach(share => {
-                    html += `<li>${share.name} (${share.email}) - ${share.permission} 
-                            <button onclick="removeShare(${share.user_id})">Remove</button></li>`;
-                });
-                html += '</ul>';
-                document.getElementById('share-list').innerHTML = html;
-            }
-        });
-    }
-
-    function loadUsers() {
-        fetch('share.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'action=get_users'
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                let select = document.getElementById('user_id');
-                data.users.forEach(user => {
-                    let option = document.createElement('option');
-                    option.value = user.id;
-                    option.textContent = user.name + ' (' + user.email + ')';
-                    select.appendChild(option);
-                });
-            }
-        });
-    }
-
-    document.getElementById('share-form').addEventListener('submit', function(e) {
-        e.preventDefault();
-        const formData = new FormData(this);
-        formData.append('action', 'add');
-        fetch('share.php', {
-            method: 'POST',
-            body: new URLSearchParams(formData)
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                alert('Shared successfully');
-                loadShares();
-            } else {
-                alert('Error: ' + data.error);
-            }
-        });
-    });
-
-    function removeShare(userId) {
-        if (!confirm('Remove share from this user?')) return;
-        const formData = new FormData();
-        formData.append('action', 'remove');
-        formData.append('lead_id', '<?= $lead['id'] ?>');
-        formData.append('user_id', userId);
-        fetch('share.php', {
-            method: 'POST',
-            body: new URLSearchParams(formData)
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                loadShares();
-            } else {
-                alert('Error: ' + data.error);
-            }
-        });
-    }
-    </script>
     <?php endif; ?>
 
 <?php endif; ?>
 
-<!-- Add contact action styles and copy email functionality -->
 <style>
+/* Status badges */
+.status-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+.status-new { background-color: #e3f2fd; color: #0d47a1; }
+.status-contacted { background-color: #fff3e0; color: #e65100; }
+.status-interested { background-color: #e8f5e8; color: #1e5e1e; }
+.status-not-interested { background-color: #ffebee; color: #b71c1c; }
+.status-converted { background-color: #e8eaf6; color: #1a237e; }
+.status-no_answer { background-color: #f5f5f5; color: #424242; }
+.status-left_message { background-color: #e1f5fe; color: #01579b; }
+.status-callback { background-color: #fff9c4; color: #f57f17; }
+.status-sent { background-color: #e8f5e8; color: #1e5e1e; }
+.status-failed { background-color: #ffebee; color: #b71c1c; }
+
 /* Contact actions */
 .contact-actions {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
 }
-
 .contact-icon {
     font-size: 1.2rem;
     text-decoration: none;
@@ -659,22 +610,54 @@ include 'includes/header.php';
     opacity: 0.7;
     transition: opacity 0.2s;
 }
-
 .contact-icon:hover {
     opacity: 1;
 }
+.contact-icon.whatsapp { color: #25D366; }
+.contact-icon.email { color: var(--link-color, #333); }
 
-.contact-icon.whatsapp {
-    color: #25D366;
+/* Action buttons */
+.action-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
-.contact-icon.email {
-    color: #333;
+/* Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal-content {
+    background: var(--card-bg, #fff);
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    max-width: 600px;
+    width: 90%;
+}
+.modal .close {
+    float: right;
+    font-size: 1.5rem;
+    font-weight: bold;
+    cursor: pointer;
+    color: var(--footer-text);
+}
+.modal .close:hover {
+    color: var(--text-color);
 }
 </style>
 
 <script>
-// Copy email functionality (for view mode)
+// Copy email functionality
 document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.copy-email').forEach(icon => {
         icon.addEventListener('click', function(e) {
@@ -687,7 +670,117 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     });
+
+    // Email view modal
+    document.querySelectorAll('.view-email').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            document.getElementById('modalSubject').textContent = this.dataset.subject;
+            document.getElementById('modalRecipient').textContent = this.dataset.recipient;
+            document.getElementById('modalDate').textContent = this.dataset.date;
+            document.getElementById('modalBody').textContent = this.dataset.body;
+            document.getElementById('emailModal').style.display = 'flex';
+        });
+    });
 });
+
+function closeEmailModal() {
+    document.getElementById('emailModal').style.display = 'none';
+}
+
+// Sharing functionality (only if user is owner)
+<?php if ($lead && $lead['user_id'] == $_SESSION['user_id']): ?>
+function loadShares() {
+    fetch('share.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'action=list&lead_id=<?= $lead['id'] ?>'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            let html = '<h4>Currently shared with:</h4>';
+            if (data.shares.length === 0) {
+                html += '<p>Not shared with anyone.</p>';
+            } else {
+                html += '<ul>';
+                data.shares.forEach(share => {
+                    html += `<li>${share.name} (${share.email}) - ${share.permission} 
+                            <button class="btn-danger btn-small" onclick="removeShare(${share.user_id})">Remove</button></li>`;
+                });
+                html += '</ul>';
+            }
+            document.getElementById('share-list').innerHTML = html;
+        }
+    });
+}
+
+function loadUsers() {
+    fetch('share.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'action=get_users'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            let select = document.getElementById('user_id');
+            select.innerHTML = '<option value="">Select user...</option>';
+            data.users.forEach(user => {
+                let option = document.createElement('option');
+                option.value = user.id;
+                option.textContent = user.name + ' (' + user.email + ')';
+                select.appendChild(option);
+            });
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadShares();
+    loadUsers();
+
+    document.getElementById('share-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const formData = new FormData(this);
+        formData.append('action', 'add');
+        fetch('share.php', {
+            method: 'POST',
+            body: new URLSearchParams(formData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showNotification('Shared successfully', 'success');
+                loadShares();
+            } else {
+                alert('Error: ' + data.error);
+            }
+        });
+    });
+});
+
+function removeShare(userId) {
+    if (!confirm('Remove share from this user?')) return;
+    const formData = new FormData();
+    formData.append('action', 'remove');
+    formData.append('lead_id', '<?= $lead['id'] ?>');
+    formData.append('user_id', userId);
+    fetch('share.php', {
+        method: 'POST',
+        body: new URLSearchParams(formData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showNotification('Share removed', 'success');
+            loadShares();
+        } else {
+            alert('Error: ' + data.error);
+        }
+    });
+}
+<?php endif; ?>
 
 // Notification helper
 function showNotification(message, type) {

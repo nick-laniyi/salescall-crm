@@ -1,0 +1,5 @@
+# Place this in every folder where error_log appears
+<Files error_log>
+    Order deny,allow
+    Deny from all
+</Files>

@@ -11,3 +11,13 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Upload directories - keep empty but don't commit contents
+/temp_uploads/*
+!/temp_uploads/.gitkeep
+
+# Installation lock file
+/includes/installed.lock
+
+# Auto-generated email config
+/includes/email_config.php

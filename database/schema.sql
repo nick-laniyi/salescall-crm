@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost
--- Generation Time: Feb 18, 2026 at 10:13 AM
+-- Generation Time: Feb 19, 2026 at 11:02 AM
 -- Server version: 8.0.44-0ubuntu0.24.04.2
 -- PHP Version: 8.3.6
 
@@ -59,6 +59,45 @@ CREATE TABLE `custom_fields` (
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `email_logs`
+--
+
+CREATE TABLE `email_logs` (
+  `id` int NOT NULL,
+  `user_id` int NOT NULL,
+  `lead_id` int NOT NULL,
+  `recipient_email` varchar(255) NOT NULL,
+  `recipient_name` varchar(255) DEFAULT NULL,
+  `subject` varchar(255) NOT NULL,
+  `body` text,
+  `status` enum('sent','failed') DEFAULT 'sent',
+  `sent_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `email_settings`
+--
+
+CREATE TABLE `email_settings` (
+  `id` int NOT NULL,
+  `user_id` int NOT NULL,
+  `smtp_host` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `smtp_port` int NOT NULL DEFAULT '587',
+  `smtp_user` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `smtp_pass` text COLLATE utf8mb4_unicode_ci NOT NULL,
+  `encryption` enum('tls','ssl','none') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'tls',
+  `from_email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `from_name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `leads`
 --
 
@@ -68,12 +107,13 @@ CREATE TABLE `leads` (
   `project_id` int DEFAULT NULL,
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `company` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `phone` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `phone` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `email` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `status` enum('new','contacted','interested','not_interested','converted') COLLATE utf8mb4_unicode_ci DEFAULT 'new',
   `notes` text COLLATE utf8mb4_unicode_ci,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `last_contacted` date DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -157,7 +197,7 @@ CREATE TABLE `project_columns` (
   `id` int NOT NULL,
   `project_id` int NOT NULL,
   `name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `column_type` enum('text','number','date','select') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'text',
+  `column_type` enum('text','number','date','select','email','phone') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'text',
   `options` text COLLATE utf8mb4_unicode_ci,
   `sort_order` int DEFAULT '0',
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP
@@ -175,7 +215,8 @@ CREATE TABLE `users` (
   `email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `password_hash` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  `role` enum('admin','user') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'user'
+  `role` enum('admin','user') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'user',
+  `setup_completed` tinyint(1) DEFAULT '0'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
@@ -197,6 +238,22 @@ ALTER TABLE `calls`
 ALTER TABLE `custom_fields`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `unique_field_per_user` (`user_id`,`field_name`);
+
+--
+-- Indexes for table `email_logs`
+--
+ALTER TABLE `email_logs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_lead` (`lead_id`),
+  ADD KEY `idx_user` (`user_id`),
+  ADD KEY `idx_sent_at` (`sent_at`);
+
+--
+-- Indexes for table `email_settings`
+--
+ALTER TABLE `email_settings`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `unique_user` (`user_id`);
 
 --
 -- Indexes for table `leads`
@@ -277,6 +334,18 @@ ALTER TABLE `custom_fields`
   MODIFY `id` int NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT for table `email_logs`
+--
+ALTER TABLE `email_logs`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `email_settings`
+--
+ALTER TABLE `email_settings`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT for table `leads`
 --
 ALTER TABLE `leads`
@@ -340,6 +409,19 @@ ALTER TABLE `calls`
 --
 ALTER TABLE `custom_fields`
   ADD CONSTRAINT `custom_fields_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `email_logs`
+--
+ALTER TABLE `email_logs`
+  ADD CONSTRAINT `email_logs_ibfk_1` FOREIGN KEY (`lead_id`) REFERENCES `leads` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `email_logs_ibfk_2` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `email_settings`
+--
+ALTER TABLE `email_settings`
+  ADD CONSTRAINT `email_settings_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `leads`
